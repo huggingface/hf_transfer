@@ -23,7 +23,6 @@ async fn download_async(
     max_files: usize,
     chunk_size: usize,
 ) -> PyResult<()> {
-    // let start = std::time::Instant::now();
     let client = reqwest::Client::new();
     let response = client
         .head(&url)
@@ -66,15 +65,6 @@ async fn download_async(
         futures::future::join_all(handles).await;
     let results: PyResult<()> = results.into_iter().flatten().collect();
     let _ = results?;
-
-    // let size = length as f64 / 1024.0 / 1024.0;
-    // let speed = size / start.elapsed().as_secs_f64();
-    // println!(
-    //     "Took {:?} for {:.2}Mo ({:.2} Mo/s)",
-    //     start.elapsed(),
-    //     size,
-    //     speed
-    // );
     Ok(())
 }
 
