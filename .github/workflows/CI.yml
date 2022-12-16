@@ -14,7 +14,7 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     - run: |
-         apt update && apt install openssl-dev
+         sudo apt update && sudo apt install openssl-dev
     - uses: PyO3/maturin-action@v1
       with:
         manylinux: auto
