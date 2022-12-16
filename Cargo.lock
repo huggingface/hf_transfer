@@ -232,6 +232,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hf_transfer"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "pyo3",
+ "reqwest",
+ "tokio",
+]
+
+[[package]]
 name = "http"
 version = "0.2.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -679,16 +689,6 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "winreg",
-]
-
-[[package]]
-name = "rust_dl_py"
-version = "0.1.0"
-dependencies = [
- "futures",
- "pyo3",
- "reqwest",
- "tokio",
 ]
 
 [[package]]
