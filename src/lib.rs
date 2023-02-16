@@ -1,6 +1,6 @@
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
-use reqwest::header::{CONTENT_LENGTH, RANGE};
+use reqwest::header::{CONTENT_RANGE, RANGE};
 use std::io::SeekFrom;
 use std::sync::Arc;
 
@@ -8,7 +8,6 @@ use tokio::io::AsyncSeekExt;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
 
-/// Formats the sum of two numbers as string.
 #[pyfunction]
 fn download(url: String, filename: String, max_files: usize, chunk_size: usize) -> PyResult<()> {
     tokio::runtime::Builder::new_multi_thread()
@@ -25,17 +24,21 @@ async fn download_async(
 ) -> PyResult<()> {
     let client = reqwest::Client::new();
     let response = client
-        .head(&url)
+        .get(&url)
+        .header(RANGE, format!("bytes=0-0"))
         .send()
         .await
         .map_err(|err| PyException::new_err(format!("Error while downloading: {:?}", err)))?;
-    let length = response
+    let content_range = response
         .headers()
-        .get(CONTENT_LENGTH)
+        .get(CONTENT_RANGE)
         .ok_or(PyException::new_err("No content length"))?
         .to_str()
         .map_err(|err| PyException::new_err(format!("Error while downloading: {:?}", err)))?;
-    let length: usize = length
+    // Content-Range: bytes 0-0/702517648
+    // Skipping 10 first char to get the content-length
+    // I know, kind of hacky
+    let length: usize = content_range[10..]
         .parse()
         .map_err(|err| PyException::new_err(format!("Error while downloading: {:?}", err)))?;
 
