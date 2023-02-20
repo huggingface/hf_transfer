@@ -25,22 +25,27 @@ async fn download_async(
     let client = reqwest::Client::new();
     let response = client
         .get(&url)
-        .header(RANGE, format!("bytes=0-0"))
+        .header(RANGE, "bytes=0-0".to_string())
         .send()
         .await
-        .map_err(|err| PyException::new_err(format!("Error while downloading: {:?}", err)))?;
+        .map_err(|err| PyException::new_err(format!("Error while downloading: {err:?}")))?;
     let content_range = response
         .headers()
         .get(CONTENT_RANGE)
         .ok_or(PyException::new_err("No content length"))?
         .to_str()
-        .map_err(|err| PyException::new_err(format!("Error while downloading: {:?}", err)))?;
+        .map_err(|err| PyException::new_err(format!("Error while downloading: {err:?}")))?;
+
+    let size: Vec<&str> = content_range.split('/').collect();
     // Content-Range: bytes 0-0/702517648
-    // Skipping 10 first char to get the content-length
-    // I know, kind of hacky
-    let length: usize = content_range[10..]
+    // https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Range
+    let length: usize = size
+        .last()
+        .ok_or(PyException::new_err(
+            "Error while downloading: No size was detected",
+        ))?
         .parse()
-        .map_err(|err| PyException::new_err(format!("Error while downloading: {:?}", err)))?;
+        .map_err(|err| PyException::new_err(format!("Error while downloading: {err:?}")))?;
 
     let mut handles = vec![];
     let semaphore = Arc::new(Semaphore::new(max_files));
@@ -54,7 +59,7 @@ async fn download_async(
         let stop = std::cmp::min(start + chunk_size - 1, length);
         let permit =
             semaphore.clone().acquire_owned().await.map_err(|err| {
-                PyException::new_err(format!("Error while downloading: {:?}", err))
+                PyException::new_err(format!("Error while downloading: {err:?}"))
             })?;
         handles.push(tokio::spawn(async move {
             let chunk = download_chunk(client, url, filename, start, stop).await;
@@ -67,7 +72,7 @@ async fn download_async(
     let results: Vec<Result<PyResult<()>, tokio::task::JoinError>> =
         futures::future::join_all(handles).await;
     let results: PyResult<()> = results.into_iter().flatten().collect();
-    let _ = results?;
+    results?;
     Ok(())
 }
 
@@ -85,23 +90,23 @@ async fn download_chunk(
         .create(true)
         .open(filename)
         .await
-        .map_err(|err| PyException::new_err(format!("Error while downloading: {:?}", err)))?;
+        .map_err(|err| PyException::new_err(format!("Error while downloading: {err:?}")))?;
     file.seek(SeekFrom::Start(start as u64))
         .await
-        .map_err(|err| PyException::new_err(format!("Error while downloading: {:?}", err)))?;
+        .map_err(|err| PyException::new_err(format!("Error while downloading: {err:?}")))?;
     let response = client
         .get(url)
         .header(RANGE, range)
         .send()
         .await
-        .map_err(|err| PyException::new_err(format!("Error while downloading: {:?}", err)))?;
+        .map_err(|err| PyException::new_err(format!("Error while downloading: {err:?}")))?;
     let content = response
         .bytes()
         .await
-        .map_err(|err| PyException::new_err(format!("Error while downloading: {:?}", err)))?;
+        .map_err(|err| PyException::new_err(format!("Error while downloading: {err:?}")))?;
     file.write_all(&content)
         .await
-        .map_err(|err| PyException::new_err(format!("Error while downloading: {:?}", err)))?;
+        .map_err(|err| PyException::new_err(format!("Error while downloading: {err:?}")))?;
     Ok(())
 }
 
