@@ -14,6 +14,21 @@ fn download(url: String, filename: String, max_files: usize, chunk_size: usize) 
         .enable_all()
         .build()?
         .block_on(async { download_async(url, filename, max_files, chunk_size).await })
+        .map_err(|err| {
+            let path = Path::new(&filename);
+            if path.exists() {
+                match remove_file(filename) {
+                    Ok(_) => err,
+                    Err(err) => {
+                        return PyException::new_err(format!(
+                            "Error while removing corrupted file: {err:?}"
+                        ));
+                    }
+                }
+            } else {
+                err
+            }
+        })
 }
 
 async fn download_async(
@@ -57,10 +72,11 @@ async fn download_async(
         let client = client.clone();
 
         let stop = std::cmp::min(start + chunk_size - 1, length);
-        let permit =
-            semaphore.clone().acquire_owned().await.map_err(|err| {
-                PyException::new_err(format!("Error while downloading: {err:?}"))
-            })?;
+        let permit = semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|err| PyException::new_err(format!("Error while downloading: {err:?}")))?;
         handles.push(tokio::spawn(async move {
             let chunk = download_chunk(client, url, filename, start, stop).await;
             drop(permit);
