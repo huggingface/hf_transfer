@@ -7,6 +7,7 @@ use std::sync::Arc;
 use tokio::io::AsyncSeekExt;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
+use std::path::Path;
 use std::fs::remove_file;
 
 #[pyfunction]
