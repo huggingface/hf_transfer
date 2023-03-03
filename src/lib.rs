@@ -15,7 +15,7 @@ fn download(url: String, filename: String, max_files: usize, chunk_size: usize) 
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
-        .block_on(async { download_async(url, filename, max_files, chunk_size).await })
+        .block_on(async { download_async(url, filename.clone(), max_files, chunk_size).await })
         .map_err(|err| {
             let path = Path::new(&filename);
             if path.exists() {
