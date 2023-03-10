@@ -1,14 +1,19 @@
+mod retry;
+
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use reqwest::header::{CONTENT_RANGE, RANGE};
+use retry::retry_http;
 use std::io::SeekFrom;
 use std::sync::Arc;
 
+use std::fs::remove_file;
+use std::path::Path;
 use tokio::io::AsyncSeekExt;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
-use std::path::Path;
-use std::fs::remove_file;
+
+const MAX_HTTP_RETRIES: u32 = 5;
 
 #[pyfunction]
 fn download(url: String, filename: String, max_files: usize, chunk_size: usize) -> PyResult<()> {
@@ -112,12 +117,13 @@ async fn download_chunk(
     file.seek(SeekFrom::Start(start as u64))
         .await
         .map_err(|err| PyException::new_err(format!("Error while downloading: {err:?}")))?;
-    let response = client
-        .get(url)
-        .header(RANGE, range)
-        .send()
-        .await
-        .map_err(|err| PyException::new_err(format!("Error while downloading: {err:?}")))?;
+    let response = retry_http(
+        client.get(url).header(RANGE, range),
+        MAX_HTTP_RETRIES,
+        |r| r.status().is_success(),
+    )
+    .await
+    .map_err(|err| PyException::new_err(format!("Error while downloading: {err:?}")))?;
     let content = response
         .bytes()
         .await
