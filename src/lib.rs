@@ -12,12 +12,10 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
 use tokio::time::sleep;
 
-/// download(url, filename, max_files, chunk_size, parallel_failures=0, max_retries=0)
-/// --
-///
 /// parallel_failures:  Number of maximum failures of different chunks in parallel (cannot exceed max_files)
 /// max_retries: Number of maximum attempts per chunk. (Retries are exponentially backed off + jitter)
 #[pyfunction]
+#[pyo3(signature = (url, filename, max_files, chunk_size, parallel_failures=0, max_retries=0))]
 fn download(
     url: String,
     filename: String,
@@ -29,6 +27,11 @@ fn download(
     if parallel_failures > max_files {
         return Err(PyException::new_err(format!(
             "Error parallel_failures cannot be > max_files"
+        )));
+    }
+    if (parallel_failures == 0) != (max_retries == 0) {
+        return Err(PyException::new_err(format!(
+            "For retry mechanism you need to set both `parallel_failures` and `max_retries`"
         )));
     }
     tokio::runtime::Builder::new_multi_thread()
