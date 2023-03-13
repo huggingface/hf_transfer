@@ -25,14 +25,15 @@ fn download(
     max_retries: usize,
 ) -> PyResult<()> {
     if parallel_failures > max_files {
-        return Err(PyException::new_err(format!(
-            "Error parallel_failures cannot be > max_files"
-        )));
+        return Err(PyException::new_err(
+            "Error parallel_failures cannot be > max_files".to_string(),
+        ));
     }
     if (parallel_failures == 0) != (max_retries == 0) {
-        return Err(PyException::new_err(format!(
+        return Err(PyException::new_err(
             "For retry mechanism you need to set both `parallel_failures` and `max_retries`"
-        )));
+                .to_string(),
+        ));
     }
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
