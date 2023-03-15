@@ -15,12 +15,13 @@ use tokio::time::sleep;
 /// parallel_failures:  Number of maximum failures of different chunks in parallel (cannot exceed max_files)
 /// max_retries: Number of maximum attempts per chunk. (Retries are exponentially backed off + jitter)
 #[pyfunction]
-#[pyo3(signature = (url, filename, max_files, chunk_size, parallel_failures=0, max_retries=0))]
+#[pyo3(signature = (url, filename, max_files, chunk_size, num_threads=-1, parallel_failures=0, max_retries=0))]
 fn download(
     url: String,
     filename: String,
     max_files: usize,
     chunk_size: usize,
+    num_threads: isize,
     parallel_failures: usize,
     max_retries: usize,
 ) -> PyResult<()> {
@@ -35,9 +36,14 @@ fn download(
                 .to_string(),
         ));
     }
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?
+    let mut builder = tokio::runtime::Builder::new_multi_thread();
+    builder.enable_all();
+
+    if num_threads >= 0 {
+        builder.worker_threads(num_threads as usize);
+    }
+
+    builder.build()?
         .block_on(async {
             download_async(
                 url,
