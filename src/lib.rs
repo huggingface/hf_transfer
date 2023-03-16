@@ -1,7 +1,8 @@
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 use rand::{thread_rng, Rng};
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_RANGE, RANGE};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_LENGTH, CONTENT_RANGE, RANGE};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs::remove_file;
@@ -75,12 +76,13 @@ fn download(
 /// parallel_failures:  Number of maximum failures of different chunks in parallel (cannot exceed max_files)
 /// max_retries: Number of maximum attempts per chunk. (Retries are exponentially backed off + jitter)
 #[pyfunction]
-#[pyo3(signature = (file_path, upload_action, verify_action, upload_info, token, max_files, parallel_failures=0, max_retries=0))]
+#[pyo3(signature = (file_path, upload_action, verify_action, sha256, size, token, max_files, parallel_failures=0, max_retries=0))]
 fn upload(
     file_path: String,
-    upload_action: LfsAction,
-    verify_action: Option<LfsAction>,
-    upload_info: UploadInfo,
+    upload_action: &PyDict,
+    verify_action: Option<&PyDict>,
+    sha256: Vec<u8>,
+    size: usize,
     token: Option<String>,
     max_files: usize,
     parallel_failures: usize,
@@ -97,6 +99,38 @@ fn upload(
                 .to_string(),
         ));
     }
+
+    let upload_action = LfsAction {
+        href: upload_action
+            .get_item("href")
+            .ok_or_else(|| PyException::new_err(format!("malformatted lfs_action: missing href")))?
+            .to_string(),
+        header: upload_action
+            .get_item("header")
+            .ok_or_else(|| {
+                PyException::new_err(format!("malformatted lfs_action: missing header"))
+            })?
+            .extract()?,
+    };
+
+    let verify_action = match verify_action {
+        Some(va) => Some(LfsAction {
+            href: va
+                .get_item("href")
+                .ok_or_else(|| {
+                    PyException::new_err(format!("malformatted lfs_action: missing href"))
+                })?
+                .to_string(),
+            header: va
+                .get_item("header")
+                .ok_or_else(|| {
+                    PyException::new_err(format!("malformatted lfs_action: missing header"))
+                })?
+                .extract()?,
+        }),
+        None => None,
+    };
+
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
@@ -105,7 +139,8 @@ fn upload(
                 file_path,
                 upload_action,
                 verify_action,
-                upload_info,
+                sha256,
+                size,
                 token,
                 max_files,
                 parallel_failures,
@@ -266,25 +301,14 @@ async fn download_chunk(
     Ok(())
 }
 
-#[derive(Clone)]
-#[pyclass]
-struct UploadInfo {
-    sha256: Vec<u8>,
-    size: usize,
+fn get_oid_from_sha(sha: &[u8]) -> String {
+    sha.iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<String>>()
+        .join("")
 }
 
-impl UploadInfo {
-    fn get_oid(&self) -> String {
-        self.sha256
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<Vec<String>>()
-            .join("")
-    }
-}
-
-#[derive(Clone)]
-#[pyclass]
+#[derive(Clone, Debug)]
 struct LfsAction {
     href: String,
     header: HashMap<String, String>,
@@ -294,15 +318,6 @@ struct LfsAction {
 struct UploadedObject {
     oid: String,
     size: usize,
-}
-
-impl From<UploadInfo> for UploadedObject {
-    fn from(info: UploadInfo) -> Self {
-        Self {
-            oid: info.get_oid(),
-            size: info.size,
-        }
-    }
 }
 
 #[derive(Serialize)]
@@ -331,7 +346,8 @@ async fn upload_async(
     file_path: String,
     mut upload_action: LfsAction,
     verify_action: Option<LfsAction>,
-    upload_info: UploadInfo,
+    sha256: Vec<u8>,
+    size: usize,
     token: Option<String>,
     max_files: usize,
     parallel_failures: usize,
@@ -365,7 +381,7 @@ async fn upload_async(
                 })?;
                 let parallel_failures_semaphore = parallel_failures_semaphore.clone();
                 handles.push(tokio::spawn(async move {
-                    let mut chunk = upload_chunk(&client, &url, &path, start, chunk_size, part_number).await;
+                    let mut chunk = upload_chunk(&client, &url, &path, start, size as u64, chunk_size, part_number).await;
                     let mut i = 0;
                     if parallel_failures > 0 {
                         while let Err(ul_err) = chunk {
@@ -384,7 +400,7 @@ async fn upload_async(
                             let wait_time = exponential_backoff(300, i, 10_000);
                             sleep(tokio::time::Duration::from_millis(wait_time as u64)).await;
 
-                            chunk = upload_chunk(&client, &url, &path, start, chunk_size, part_number).await;
+                            chunk = upload_chunk(&client, &url, &path, start, size as u64, chunk_size, part_number).await;
                             i += 1;
                             drop(parallel_failure_permit);
                         }
@@ -411,7 +427,7 @@ async fn upload_async(
                         ))),
                     });
 
-            let oid = upload_info.get_oid();
+            let oid = get_oid_from_sha(&sha256);
             let mut parts = results?;
             parts.sort_by_key(|p| p.part_number);
             client
@@ -453,7 +469,10 @@ async fn upload_async(
         client
             .post(verify_action.href)
             .basic_auth("USER", token)
-            .json(&UploadedObject::from(upload_info))
+            .json(&UploadedObject {
+                oid: get_oid_from_sha(&sha256),
+                size,
+            })
             .send()
             .await
             .map_err(|err| {
@@ -474,17 +493,20 @@ async fn upload_chunk(
     url: &str,
     path: &str,
     start: u64,
+    file_size: u64,
     chunk_size: u64,
     part_number: usize,
 ) -> PyResult<EtagWithPart> {
     let mut options = OpenOptions::new();
     let mut file = options.read(true).open(path).await?;
+    let bytes_transfered = std::cmp::min(file_size - start, chunk_size);
 
     file.seek(SeekFrom::Start(start as u64)).await?;
     let chunk = file.take(chunk_size);
 
     let response = client
         .put(url)
+        .header(CONTENT_LENGTH, bytes_transfered)
         .body(reqwest::Body::wrap_stream(FramedRead::new(
             chunk,
             BytesCodec::new(),
