@@ -14,6 +14,7 @@ use tokio::time::sleep;
 
 /// parallel_failures:  Number of maximum failures of different chunks in parallel (cannot exceed max_files)
 /// max_retries: Number of maximum attempts per chunk. (Retries are exponentially backed off + jitter)
+/// number of threads can be tuned by environment variable `TOKIO_WORKER_THREADS` as documented in https://docs.rs/tokio/latest/tokio/runtime/struct.Builder.html#method.worker_threads
 #[pyfunction]
 #[pyo3(signature = (url, filename, max_files, chunk_size, parallel_failures=0, max_retries=0))]
 fn download(
