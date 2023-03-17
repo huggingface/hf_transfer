@@ -15,9 +15,12 @@ use tokio::sync::Semaphore;
 use tokio::time::sleep;
 use tokio_util::codec::{BytesCodec, FramedRead};
 
+/// max_files: Number of open file handles, which determines the maximum number of parallel downloads
 /// parallel_failures:  Number of maximum failures of different chunks in parallel (cannot exceed max_files)
 /// max_retries: Number of maximum attempts per chunk. (Retries are exponentially backed off + jitter)
-/// number of threads can be tuned by environment variable `TOKIO_WORKER_THREADS` as documented in https://docs.rs/tokio/latest/tokio/runtime/struct.Builder.html#method.worker_threads
+///
+/// The number of threads can be tuned by the environment variable `TOKIO_WORKER_THREADS` as documented in
+/// https://docs.rs/tokio/latest/tokio/runtime/struct.Builder.html#method.worker_threads
 #[pyfunction]
 #[pyo3(signature = (url, filename, max_files, chunk_size, parallel_failures=0, max_retries=0, headers=None))]
 fn download(
@@ -72,16 +75,26 @@ fn download(
         })
 }
 
+/// parts_urls: Dictionary consisting of part numbers as keys and the associated url as values
+/// completion_url: The url that should be called when the upload is finished
+/// max_files: Number of open file handles, which determines the maximum number of parallel uploads
 /// parallel_failures:  Number of maximum failures of different chunks in parallel (cannot exceed max_files)
 /// max_retries: Number of maximum attempts per chunk. (Retries are exponentially backed off + jitter)
+///
+/// The number of threads can be tuned by the environment variable `TOKIO_WORKER_THREADS` as documented in
+/// https://docs.rs/tokio/latest/tokio/runtime/struct.Builder.html#method.worker_threads
+///
+/// See https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpuoverview.html for more information
+/// on the multipart upload
 #[pyfunction]
-#[pyo3(signature = (file_path, upload_action, verify_action, upload_info, token, max_files, parallel_failures=0, max_retries=0))]
+#[pyo3(signature = (file_path, file_size, oid, parts_urls, completion_url, chunk_size, max_files, parallel_failures=0, max_retries=0))]
 fn upload(
     file_path: String,
-    upload_action: LfsAction,
-    verify_action: Option<LfsAction>,
-    upload_info: UploadInfo,
-    token: Option<String>,
+    file_size: usize,
+    oid: String,
+    parts_urls: HashMap<String, String>,
+    completion_url: String,
+    chunk_size: u64,
     max_files: usize,
     parallel_failures: usize,
     max_retries: usize,
@@ -104,10 +117,11 @@ fn upload(
         .block_on(async {
             upload_async(
                 file_path,
-                upload_action,
-                verify_action,
-                upload_info,
-                token,
+                file_size,
+                oid,
+                parts_urls,
+                completion_url,
+                chunk_size,
                 max_files,
                 parallel_failures,
                 max_retries,
@@ -267,47 +281,6 @@ async fn download_chunk(
     Ok(())
 }
 
-#[derive(Clone, Debug, FromPyObject)]
-struct LfsAction {
-    #[pyo3(item)]
-    href: String,
-    #[pyo3(item)]
-    header: HashMap<String, String>,
-}
-
-#[derive(FromPyObject)]
-struct UploadInfo {
-    #[pyo3(attribute)]
-    sha256: Vec<u8>,
-    #[pyo3(attribute)]
-    size: usize,
-}
-
-impl UploadInfo {
-    fn get_oid(&self) -> String {
-        self.sha256
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<Vec<String>>()
-            .join("")
-    }
-}
-
-#[derive(Serialize)]
-struct UploadedObject {
-    oid: String,
-    size: usize,
-}
-
-impl From<UploadInfo> for UploadedObject {
-    fn from(value: UploadInfo) -> Self {
-        Self {
-            oid: value.get_oid(),
-            size: value.size,
-        }
-    }
-}
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct EtagWithPart {
@@ -332,43 +305,38 @@ impl CompletionPayload {
 
 async fn upload_async(
     file_path: String,
-    mut upload_action: LfsAction,
-    verify_action: Option<LfsAction>,
-    upload_info: UploadInfo,
-    token: Option<String>,
+    file_size: usize,
+    oid: String,
+    parts_urls: HashMap<String, String>,
+    completion_url: String,
+    chunk_size: u64,
     max_files: usize,
     parallel_failures: usize,
     max_retries: usize,
 ) -> PyResult<()> {
     let client = reqwest::Client::new();
-    let chunk_size = upload_action.header.remove("chunk_size");
-    let mut options = OpenOptions::new();
-    let file = options.read(true).open(&file_path).await?;
-    match chunk_size {
-        Some(chunk_size_header) => {
-            let chunk_size = chunk_size_header.parse::<u64>().map_err(|err| {
-                PyException::new_err(format!("Could not parse chunk_size header: {err}"))
-            })?;
 
-            let mut handles = vec![];
-            let semaphore = Arc::new(Semaphore::new(max_files));
-            let parallel_failures_semaphore = Arc::new(Semaphore::new(parallel_failures));
+    let mut handles = vec![];
+    let semaphore = Arc::new(Semaphore::new(max_files));
+    let parallel_failures_semaphore = Arc::new(Semaphore::new(parallel_failures));
 
-            for (part_number, presigned_url) in &upload_action.header {
-                let url = presigned_url.to_string();
-                let path = file_path.to_owned();
-                let client = client.clone();
-                let part_number = part_number.parse::<usize>().map_err(|err| {
-                    PyException::new_err(format!("Error parsing part number: {err}"))
-                })?;
+    for (part_number, presigned_url) in &parts_urls {
+        let url = presigned_url.to_string();
+        let path = file_path.to_owned();
+        let client = client.clone();
+        let part_number = part_number
+            .parse::<usize>()
+            .map_err(|err| PyException::new_err(format!("Error parsing part number: {err}")))?;
 
-                let start = (part_number as u64 - 1) * chunk_size;
-                let permit = semaphore.clone().acquire_owned().await.map_err(|err| {
-                    PyException::new_err(format!("Error acquiring semaphore: {err}"))
-                })?;
-                let parallel_failures_semaphore = parallel_failures_semaphore.clone();
-                handles.push(tokio::spawn(async move {
-                    let mut chunk = upload_chunk(&client, &url, &path, start, upload_info.size as u64, chunk_size, part_number).await;
+        let start = (part_number as u64 - 1) * chunk_size;
+        let permit = semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|err| PyException::new_err(format!("Error acquiring semaphore: {err}")))?;
+        let parallel_failures_semaphore = parallel_failures_semaphore.clone();
+        handles.push(tokio::spawn(async move {
+                    let mut chunk = upload_chunk(&client, &url, &path, start, file_size as u64, chunk_size, part_number).await;
                     let mut i = 0;
                     if parallel_failures > 0 {
                         while let Err(ul_err) = chunk {
@@ -387,7 +355,7 @@ async fn upload_async(
                             let wait_time = exponential_backoff(300, i, 10_000);
                             sleep(tokio::time::Duration::from_millis(wait_time as u64)).await;
 
-                            chunk = upload_chunk(&client, &url, &path, start, upload_info.size as u64, chunk_size, part_number).await;
+                            chunk = upload_chunk(&client, &url, &path, start, file_size as u64, chunk_size, part_number).await;
                             i += 1;
                             drop(parallel_failure_permit);
                         }
@@ -395,80 +363,39 @@ async fn upload_async(
                     drop(permit);
                     chunk
                 }));
-            }
-
-            let results: Vec<Result<PyResult<EtagWithPart>, tokio::task::JoinError>> =
-                futures::future::join_all(handles).await;
-
-            let results: PyResult<Vec<EtagWithPart>> =
-                results
-                    .into_iter()
-                    .try_fold(vec![], |mut acc, res| match res {
-                        Ok(Ok(etag_part)) => {
-                            acc.push(etag_part);
-                            Ok(acc)
-                        }
-                        Ok(Err(err)) => Err(err),
-                        Err(err) => Err(PyException::new_err(format!(
-                            "Error occurred while uploading: {err}"
-                        ))),
-                    });
-
-            let oid = upload_info.get_oid();
-            let mut parts = results?;
-            parts.sort_by_key(|p| p.part_number);
-            client
-                .post(upload_action.href)
-                .json(&CompletionPayload::new(&oid, parts))
-                .send()
-                .await
-                .map_err(|err| {
-                    PyException::new_err(format!("Error sending completion request: {err}"))
-                })?
-                .error_for_status()
-                .map_err(|err| {
-                    PyException::new_err(format!(
-                        "Server responded with error status code in completion request: {err}"
-                    ))
-                })?;
-        }
-        None => {
-            client
-                .put(upload_action.href)
-                .body(reqwest::Body::wrap_stream(FramedRead::new(
-                    file,
-                    BytesCodec::new(),
-                )))
-                .send()
-                .await
-                .map_err(|err| {
-                    PyException::new_err(format!("Error while uploading file: {err:?}"))
-                })?
-                .error_for_status()
-                .map_err(|err| {
-                    PyException::new_err(format!(
-                        "Server responsded with error status code for file upload: {err}"
-                    ))
-                })?;
-        }
     }
-    if let Some(verify_action) = verify_action {
-        client
-            .post(verify_action.href)
-            .basic_auth("USER", token)
-            .json(&UploadedObject::from(upload_info))
-            .send()
-            .await
-            .map_err(|err| {
-                PyException::new_err(format!("Error while verifying file upload: {err}"))
-            })?
-            .error_for_status()
-            .map_err(|err| {
-                PyException::new_err(format!(
-                    "Server responsded with error status code for upload verification: {err}"
-                ))
-            })?;
-    }
+
+    let results: Vec<Result<PyResult<EtagWithPart>, tokio::task::JoinError>> =
+        futures::future::join_all(handles).await;
+
+    let results: PyResult<Vec<EtagWithPart>> =
+        results
+            .into_iter()
+            .try_fold(vec![], |mut acc, res| match res {
+                Ok(Ok(etag_part)) => {
+                    acc.push(etag_part);
+                    Ok(acc)
+                }
+                Ok(Err(err)) => Err(err),
+                Err(err) => Err(PyException::new_err(format!(
+                    "Error occurred while uploading: {err}"
+                ))),
+            });
+
+    let mut parts = results?;
+    parts.sort_by_key(|p| p.part_number);
+    client
+        .post(completion_url)
+        .json(&CompletionPayload::new(&oid, parts))
+        .send()
+        .await
+        .map_err(|err| PyException::new_err(format!("Error sending completion request: {err}")))?
+        .error_for_status()
+        .map_err(|err| {
+            PyException::new_err(format!(
+                "Server responded with error status code in completion request: {err}"
+            ))
+        })?;
     Ok(())
 }
 

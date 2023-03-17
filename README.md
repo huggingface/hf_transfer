@@ -22,7 +22,7 @@ git clone git@github.com:huggingface/huggingface_hub.git
 # git clone https://github.com/huggingface/huggingface_hub.git
 
 cd huggingface_hub
-python3 -m pip install -e . ".[quality]"
+python3 -m pip install -e ".[quality]"
 ```
 
 You can use the following test script:
