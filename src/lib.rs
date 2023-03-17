@@ -412,7 +412,7 @@ async fn upload_chunk(
     let mut file = options.read(true).open(path).await?;
     let bytes_transfered = std::cmp::min(file_size - start, chunk_size);
 
-    file.seek(SeekFrom::Start(start as u64)).await?;
+    file.seek(SeekFrom::Start(start)).await?;
     let chunk = file.take(chunk_size);
 
     let response = client
@@ -436,16 +436,15 @@ async fn upload_chunk(
         etag: response
             .headers()
             .get("etag")
-            .ok_or(PyException::new_err(format!(
-                "Missing Etag in response header"
-            )))?
+            .ok_or(PyException::new_err(
+                "Missing Etag in response header".to_string(),
+            ))?
             .to_str()
             .map_err(|err| {
                 PyException::new_err(format!("Error deserializing etag to string: {err}"))
             })?
             .to_owned()
-            .replace("\\", "")
-            .replace("\"", ""),
+            .replace(['\\', '\"'], ""),
         part_number,
     };
 
