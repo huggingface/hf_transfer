@@ -28,6 +28,11 @@ python3 -m pip install -e .
 You can use the following test script:
 
 ```py
+import os
+
+# os.environ["HF_ENDPOINT"] = "http://localhost:5564"
+os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+
 from huggingface_hub import HfApi, logging
 
 logging.set_verbosity_debug()
