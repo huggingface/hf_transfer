@@ -2,7 +2,6 @@ use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use rand::{thread_rng, Rng};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_LENGTH, CONTENT_RANGE, RANGE};
-use serde::Serialize;
 use std::collections::HashMap;
 use std::fs::remove_file;
 use std::io::SeekFrom;
@@ -90,17 +89,15 @@ fn download(
 /// See https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpuoverview.html for more information
 /// on the multipart upload
 #[pyfunction]
-#[pyo3(signature = (file_path, oid, parts_urls, completion_url, chunk_size, max_files, parallel_failures=0, max_retries=0))]
+#[pyo3(signature = (file_path, parts_urls, chunk_size, max_files, parallel_failures=0, max_retries=0))]
 fn multipart_upload(
     file_path: String,
-    oid: String,
     parts_urls: HashMap<String, String>,
-    completion_url: String,
     chunk_size: u64,
     max_files: usize,
     parallel_failures: usize,
     max_retries: usize,
-) -> PyResult<()> {
+) -> PyResult<Vec<HttpResponse>> {
     if parallel_failures > max_files {
         return Err(PyException::new_err(
             "Error parallel_failures cannot be > max_files".to_string(),
@@ -119,9 +116,7 @@ fn multipart_upload(
         .block_on(async {
             upload_async(
                 file_path,
-                oid,
                 parts_urls,
-                completion_url,
                 chunk_size,
                 max_files,
                 parallel_failures,
@@ -282,43 +277,30 @@ async fn download_chunk(
     Ok(())
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct EtagWithPart {
-    etag: String,
-    part_number: usize,
-}
-
-#[derive(Serialize)]
-struct CompletionPayload {
-    oid: String,
-    parts: Vec<EtagWithPart>,
-}
-
-impl CompletionPayload {
-    fn new(oid: String, parts: Vec<EtagWithPart>) -> Self {
-        Self { oid, parts }
-    }
+#[pyclass]
+pub struct HttpResponse {
+    #[pyo3(get)]
+    pub part_number: usize,
+    #[pyo3(get)]
+    pub headers: HashMap<String, String>,
 }
 
 async fn upload_async(
     file_path: String,
-    oid: String,
     parts_urls: HashMap<String, String>,
-    completion_url: String,
     chunk_size: u64,
     max_files: usize,
     parallel_failures: usize,
     max_retries: usize,
-) -> PyResult<()> {
+) -> PyResult<Vec<HttpResponse>> {
     let client = reqwest::Client::new();
 
     let mut handles = vec![];
     let semaphore = Arc::new(Semaphore::new(max_files));
     let parallel_failures_semaphore = Arc::new(Semaphore::new(parallel_failures));
 
-    for (part_number, presigned_url) in &parts_urls {
-        let url = presigned_url.to_string();
+    for (part_number, part_url) in &parts_urls {
+        let url = part_url.to_string();
         let path = file_path.to_owned();
         let client = client.clone();
         let part_number = part_number
@@ -362,13 +344,13 @@ async fn upload_async(
                 }));
     }
 
-    let results: Vec<Result<PyResult<EtagWithPart>, tokio::task::JoinError>> =
+    let results: Vec<Result<PyResult<HttpResponse>, tokio::task::JoinError>> =
         futures::future::join_all(handles).await;
 
-    let results: PyResult<Vec<EtagWithPart>> = results
+    let results: PyResult<Vec<HttpResponse>> = results
         .into_iter()
         .flat_map(|res| match res {
-            Ok(Ok(etag_part)) => Some(Ok(etag_part)),
+            Ok(Ok(response)) => Some(Ok(response)),
             Ok(Err(err)) => Some(Err(err)),
             Err(err) => Some(Err(PyException::new_err(format!(
                 "Error occurred while uploading: {err}"
@@ -376,21 +358,7 @@ async fn upload_async(
         })
         .collect();
 
-    let mut parts = results?;
-    parts.sort_by_key(|p| p.part_number);
-    client
-        .post(completion_url)
-        .json(&CompletionPayload::new(oid, parts))
-        .send()
-        .await
-        .map_err(|err| PyException::new_err(format!("Error sending completion request: {err}")))?
-        .error_for_status()
-        .map_err(|err| {
-            PyException::new_err(format!(
-                "Server responded with error status code in completion request: {err}"
-            ))
-        })?;
-    Ok(())
+    results
 }
 
 async fn upload_chunk(
@@ -400,7 +368,7 @@ async fn upload_chunk(
     start: u64,
     chunk_size: u64,
     part_number: usize,
-) -> PyResult<EtagWithPart> {
+) -> PyResult<HttpResponse> {
     let mut options = OpenOptions::new();
     let mut file = options.read(true).open(path).await?;
     let file_size = file.metadata().await?.len();
@@ -426,23 +394,22 @@ async fn upload_chunk(
             ))
         })?;
 
-    let etag_part = EtagWithPart {
-        etag: response
-            .headers()
-            .get("etag")
-            .ok_or(PyException::new_err(
-                "Missing Etag in response header".to_string(),
-            ))?
-            .to_str()
-            .map_err(|err| {
-                PyException::new_err(format!("Error deserializing etag to string: {err}"))
-            })?
-            .to_owned()
-            .replace(['\\', '\"'], ""),
+    let mut headers = HashMap::new();
+    for (name, value) in response.headers().into_iter() {
+        headers.insert(
+            name.to_string(),
+            value
+                .to_str()
+                .map_err(|err| {
+                    PyException::new_err(format!("Response header contains non ASCII chars: {err}"))
+                })?
+                .to_owned(),
+        );
+    }
+    Ok(HttpResponse {
         part_number,
-    };
-
-    Ok(etag_part)
+        headers,
+    })
 }
 
 /// A Python module implemented in Rust.
