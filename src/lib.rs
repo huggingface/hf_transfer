@@ -15,6 +15,9 @@ use tokio::sync::Semaphore;
 use tokio::time::sleep;
 use tokio_util::codec::{BytesCodec, FramedRead};
 
+const BASE_WAIT_TIME: usize = 300;
+const MAX_WAIT_TIME: usize = 10_000;
+
 /// max_files: Number of open file handles, which determines the maximum number of parallel downloads
 /// parallel_failures:  Number of maximum failures of different chunks in parallel (cannot exceed max_files)
 /// max_retries: Number of maximum attempts per chunk. (Retries are exponentially backed off + jitter)
@@ -87,10 +90,9 @@ fn download(
 /// See https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpuoverview.html for more information
 /// on the multipart upload
 #[pyfunction]
-#[pyo3(signature = (file_path, file_size, oid, parts_urls, completion_url, chunk_size, max_files, parallel_failures=0, max_retries=0))]
-fn upload(
+#[pyo3(signature = (file_path, oid, parts_urls, completion_url, chunk_size, max_files, parallel_failures=0, max_retries=0))]
+fn multipart_upload(
     file_path: String,
-    file_size: usize,
     oid: String,
     parts_urls: HashMap<String, String>,
     completion_url: String,
@@ -117,7 +119,6 @@ fn upload(
         .block_on(async {
             upload_async(
                 file_path,
-                file_size,
                 oid,
                 parts_urls,
                 completion_url,
@@ -222,7 +223,7 @@ async fn download_async(
                         ))
                     })?;
 
-                    let wait_time = exponential_backoff(300, i, 10_000);
+                    let wait_time = exponential_backoff(BASE_WAIT_TIME, i, MAX_WAIT_TIME);
                     sleep(tokio::time::Duration::from_millis(wait_time as u64)).await;
 
                     chunk = download_chunk(&client, &url, &filename, start, stop, headers.clone()).await;
@@ -295,17 +296,13 @@ struct CompletionPayload {
 }
 
 impl CompletionPayload {
-    fn new(oid: &str, parts: Vec<EtagWithPart>) -> Self {
-        Self {
-            oid: oid.to_owned(),
-            parts,
-        }
+    fn new(oid: String, parts: Vec<EtagWithPart>) -> Self {
+        Self { oid, parts }
     }
 }
 
 async fn upload_async(
     file_path: String,
-    file_size: usize,
     oid: String,
     parts_urls: HashMap<String, String>,
     completion_url: String,
@@ -336,7 +333,7 @@ async fn upload_async(
             .map_err(|err| PyException::new_err(format!("Error acquiring semaphore: {err}")))?;
         let parallel_failures_semaphore = parallel_failures_semaphore.clone();
         handles.push(tokio::spawn(async move {
-                    let mut chunk = upload_chunk(&client, &url, &path, start, file_size as u64, chunk_size, part_number).await;
+                    let mut chunk = upload_chunk(&client, &url, &path, start, chunk_size, part_number).await;
                     let mut i = 0;
                     if parallel_failures > 0 {
                         while let Err(ul_err) = chunk {
@@ -352,10 +349,10 @@ async fn upload_async(
                                 ))
                             })?;
 
-                            let wait_time = exponential_backoff(300, i, 10_000);
+                            let wait_time = exponential_backoff(BASE_WAIT_TIME, i, MAX_WAIT_TIME);
                             sleep(tokio::time::Duration::from_millis(wait_time as u64)).await;
 
-                            chunk = upload_chunk(&client, &url, &path, start, file_size as u64, chunk_size, part_number).await;
+                            chunk = upload_chunk(&client, &url, &path, start, chunk_size, part_number).await;
                             i += 1;
                             drop(parallel_failure_permit);
                         }
@@ -368,25 +365,22 @@ async fn upload_async(
     let results: Vec<Result<PyResult<EtagWithPart>, tokio::task::JoinError>> =
         futures::future::join_all(handles).await;
 
-    let results: PyResult<Vec<EtagWithPart>> =
-        results
-            .into_iter()
-            .try_fold(vec![], |mut acc, res| match res {
-                Ok(Ok(etag_part)) => {
-                    acc.push(etag_part);
-                    Ok(acc)
-                }
-                Ok(Err(err)) => Err(err),
-                Err(err) => Err(PyException::new_err(format!(
-                    "Error occurred while uploading: {err}"
-                ))),
-            });
+    let results: PyResult<Vec<EtagWithPart>> = results
+        .into_iter()
+        .flat_map(|res| match res {
+            Ok(Ok(etag_part)) => Some(Ok(etag_part)),
+            Ok(Err(err)) => Some(Err(err)),
+            Err(err) => Some(Err(PyException::new_err(format!(
+                "Error occurred while uploading: {err}"
+            )))),
+        })
+        .collect();
 
     let mut parts = results?;
     parts.sort_by_key(|p| p.part_number);
     client
         .post(completion_url)
-        .json(&CompletionPayload::new(&oid, parts))
+        .json(&CompletionPayload::new(oid, parts))
         .send()
         .await
         .map_err(|err| PyException::new_err(format!("Error sending completion request: {err}")))?
@@ -404,12 +398,12 @@ async fn upload_chunk(
     url: &str,
     path: &str,
     start: u64,
-    file_size: u64,
     chunk_size: u64,
     part_number: usize,
 ) -> PyResult<EtagWithPart> {
     let mut options = OpenOptions::new();
     let mut file = options.read(true).open(path).await?;
+    let file_size = file.metadata().await?.len();
     let bytes_transfered = std::cmp::min(file_size - start, chunk_size);
 
     file.seek(SeekFrom::Start(start)).await?;
@@ -455,6 +449,6 @@ async fn upload_chunk(
 #[pymodule]
 fn hf_transfer(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(download, m)?)?;
-    m.add_function(wrap_pyfunction!(upload, m)?)?;
+    m.add_function(wrap_pyfunction!(multipart_upload, m)?)?;
     Ok(())
 }
