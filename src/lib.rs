@@ -92,12 +92,12 @@ fn download(
 #[pyo3(signature = (file_path, parts_urls, chunk_size, max_files, parallel_failures=0, max_retries=0))]
 fn multipart_upload(
     file_path: String,
-    parts_urls: HashMap<String, String>,
+    parts_urls: Vec<String>,
     chunk_size: u64,
     max_files: usize,
     parallel_failures: usize,
     max_retries: usize,
-) -> PyResult<Vec<HttpResponse>> {
+) -> PyResult<Vec<HashMap<String, String>>> {
     if parallel_failures > max_files {
         return Err(PyException::new_err(
             "Error parallel_failures cannot be > max_files".to_string(),
@@ -277,37 +277,26 @@ async fn download_chunk(
     Ok(())
 }
 
-#[pyclass]
-pub struct HttpResponse {
-    #[pyo3(get)]
-    pub part_number: usize,
-    #[pyo3(get)]
-    pub headers: HashMap<String, String>,
-}
-
 async fn upload_async(
     file_path: String,
-    parts_urls: HashMap<String, String>,
+    parts_urls: Vec<String>,
     chunk_size: u64,
     max_files: usize,
     parallel_failures: usize,
     max_retries: usize,
-) -> PyResult<Vec<HttpResponse>> {
+) -> PyResult<Vec<HashMap<String, String>>> {
     let client = reqwest::Client::new();
 
     let mut handles = vec![];
     let semaphore = Arc::new(Semaphore::new(max_files));
     let parallel_failures_semaphore = Arc::new(Semaphore::new(parallel_failures));
 
-    for (part_number, part_url) in &parts_urls {
+    for (part_number, part_url) in parts_urls.iter().enumerate() {
         let url = part_url.to_string();
         let path = file_path.to_owned();
         let client = client.clone();
-        let part_number = part_number
-            .parse::<usize>()
-            .map_err(|err| PyException::new_err(format!("Error parsing part number: {err}")))?;
 
-        let start = (part_number as u64 - 1) * chunk_size;
+        let start = (part_number as u64) * chunk_size;
         let permit = semaphore
             .clone()
             .acquire_owned()
@@ -315,7 +304,7 @@ async fn upload_async(
             .map_err(|err| PyException::new_err(format!("Error acquiring semaphore: {err}")))?;
         let parallel_failures_semaphore = parallel_failures_semaphore.clone();
         handles.push(tokio::spawn(async move {
-                    let mut chunk = upload_chunk(&client, &url, &path, start, chunk_size, part_number).await;
+                    let mut chunk = upload_chunk(&client, &url, &path, start, chunk_size).await;
                     let mut i = 0;
                     if parallel_failures > 0 {
                         while let Err(ul_err) = chunk {
@@ -334,7 +323,7 @@ async fn upload_async(
                             let wait_time = exponential_backoff(BASE_WAIT_TIME, i, MAX_WAIT_TIME);
                             sleep(tokio::time::Duration::from_millis(wait_time as u64)).await;
 
-                            chunk = upload_chunk(&client, &url, &path, start, chunk_size, part_number).await;
+                            chunk = upload_chunk(&client, &url, &path, start, chunk_size).await;
                             i += 1;
                             drop(parallel_failure_permit);
                         }
@@ -344,10 +333,10 @@ async fn upload_async(
                 }));
     }
 
-    let results: Vec<Result<PyResult<HttpResponse>, tokio::task::JoinError>> =
+    let results: Vec<Result<PyResult<HashMap<String, String>>, tokio::task::JoinError>> =
         futures::future::join_all(handles).await;
 
-    let results: PyResult<Vec<HttpResponse>> = results
+    let results: PyResult<Vec<HashMap<String, String>>> = results
         .into_iter()
         .flat_map(|res| match res {
             Ok(Ok(response)) => Some(Ok(response)),
@@ -367,8 +356,7 @@ async fn upload_chunk(
     path: &str,
     start: u64,
     chunk_size: u64,
-    part_number: usize,
-) -> PyResult<HttpResponse> {
+) -> PyResult<HashMap<String, String>> {
     let mut options = OpenOptions::new();
     let mut file = options.read(true).open(path).await?;
     let file_size = file.metadata().await?.len();
@@ -406,10 +394,7 @@ async fn upload_chunk(
                 .to_owned(),
         );
     }
-    Ok(HttpResponse {
-        part_number,
-        headers,
-    })
+    Ok(headers)
 }
 
 /// A Python module implemented in Rust.
