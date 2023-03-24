@@ -1,3 +1,5 @@
+# pip install boto3 hf_transfer
+
 import boto3
 from hf_transfer import multipart_upload
 from math import ceil
