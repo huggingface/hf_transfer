@@ -1,3 +1,4 @@
+use indicatif::{ProgressBar, ProgressStyle};
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use rand::{thread_rng, Rng};
@@ -66,9 +67,9 @@ fn download(
                 match remove_file(filename) {
                     Ok(_) => err,
                     Err(err) => {
-                        return PyException::new_err(format!(
+                        PyException::new_err(format!(
                             "Error while removing corrupted file: {err:?}"
-                        ));
+                        ))
                     }
                 }
             } else {
@@ -188,12 +189,23 @@ async fn download_async(
     let semaphore = Arc::new(Semaphore::new(max_files));
     let parallel_failures_semaphore = Arc::new(Semaphore::new(parallel_failures));
 
+    let progress = ProgressBar::new(length as u64);
+
+    progress.set_style(
+        ProgressStyle::with_template(
+            "[{wide_bar:.cyan/blue}] {bytes}/{total_bytes} {bytes_per_sec:>13}",
+        )
+        .unwrap()
+        .progress_chars("━ "),
+    );
+
     let chunk_size = chunk_size;
     for start in (0..length).step_by(chunk_size) {
         let url = url.clone();
         let filename = filename.clone();
         let client = client.clone();
         let headers = headers.clone();
+        let pb = progress.clone();
 
         let stop = std::cmp::min(start + chunk_size - 1, length);
         let permit = semaphore
@@ -203,7 +215,7 @@ async fn download_async(
             .map_err(|err| PyException::new_err(format!("Error while downloading: {err:?}")))?;
         let parallel_failures_semaphore = parallel_failures_semaphore.clone();
         handles.push(tokio::spawn(async move {
-            let mut chunk = download_chunk(&client, &url, &filename, start, stop, headers.clone()).await;
+            let mut chunk = download_chunk(&client, &url, &filename, start, stop, headers.clone(), &pb).await;
             let mut i = 0;
             if parallel_failures > 0 {
                 while let Err(dlerr) = chunk {
@@ -221,7 +233,7 @@ async fn download_async(
                     let wait_time = exponential_backoff(BASE_WAIT_TIME, i, MAX_WAIT_TIME);
                     sleep(tokio::time::Duration::from_millis(wait_time as u64)).await;
 
-                    chunk = download_chunk(&client, &url, &filename, start, stop, headers.clone()).await;
+                    chunk = download_chunk(&client, &url, &filename, start, stop, headers.clone(), &pb).await;
                     i += 1;
                     drop(parallel_failure_permit);
                 }
@@ -246,6 +258,7 @@ async fn download_chunk(
     start: usize,
     stop: usize,
     headers: HeaderMap,
+    progress: &ProgressBar,
 ) -> PyResult<()> {
     // Process each socket concurrently.
     let range = format!("bytes={start}-{stop}");
@@ -274,6 +287,9 @@ async fn download_chunk(
     file.write_all(&content)
         .await
         .map_err(|err| PyException::new_err(format!("Error while downloading: {err:?}")))?;
+
+    progress.inc(content.len() as u64);
+
     Ok(())
 }
 
