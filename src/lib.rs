@@ -205,13 +205,13 @@ async fn download_async(
         let headers = headers.clone();
 
         let stop = std::cmp::min(start + chunk_size - 1, length);
-        let permit = semaphore
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|err| PyException::new_err(format!("Error while downloading: {err:?}")))?;
+        let semaphore = semaphore.clone();
         let parallel_failures_semaphore = parallel_failures_semaphore.clone();
         handles.push(tokio::spawn(async move {
+            let permit = semaphore
+                .acquire_owned()
+                .await
+                .map_err(|err| PyException::new_err(format!("Error while downloading: {err:?}")))?;
             let mut chunk = download_chunk(&client, &url, &filename, start, stop, headers.clone()).await;
             let mut i = 0;
             if parallel_failures > 0 {
