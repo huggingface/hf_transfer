@@ -1,5 +1,8 @@
+use futures::stream::FuturesUnordered;
+use futures::StreamExt;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
+use pyo3::types::PyAny;
 use rand::{thread_rng, Rng};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_LENGTH, CONTENT_RANGE, RANGE};
 use std::collections::HashMap;
@@ -24,8 +27,9 @@ const MAX_WAIT_TIME: usize = 10_000;
 /// The number of threads can be tuned by the environment variable `TOKIO_WORKER_THREADS` as documented in
 /// https://docs.rs/tokio/latest/tokio/runtime/struct.Builder.html#method.worker_threads
 #[pyfunction]
-#[pyo3(signature = (url, filename, max_files, chunk_size, parallel_failures=0, max_retries=0, headers=None))]
+#[pyo3(signature = (url, filename, max_files, chunk_size, parallel_failures=0, max_retries=0, headers=None, callback=None))]
 fn download(
+    python: Python,
     url: String,
     filename: String,
     max_files: usize,
@@ -33,6 +37,7 @@ fn download(
     parallel_failures: usize,
     max_retries: usize,
     headers: Option<HashMap<String, String>>,
+    callback: Option<Py<PyAny>>,
 ) -> PyResult<()> {
     if parallel_failures > max_files {
         return Err(PyException::new_err(
@@ -50,6 +55,7 @@ fn download(
         .build()?
         .block_on(async {
             download_async(
+                python,
                 url,
                 filename.clone(),
                 max_files,
@@ -57,6 +63,7 @@ fn download(
                 parallel_failures,
                 max_retries,
                 headers,
+                callback,
             )
             .await
         })
@@ -135,6 +142,7 @@ pub fn exponential_backoff(base_wait_time: usize, n: usize, max: usize) -> usize
 }
 
 async fn download_async(
+    py: Python<'_>,
     url: String,
     filename: String,
     max_files: usize,
@@ -142,6 +150,7 @@ async fn download_async(
     parallel_failures: usize,
     max_retries: usize,
     input_headers: Option<HashMap<String, String>>,
+    callback: Option<Py<PyAny>>,
 ) -> PyResult<()> {
     let client = reqwest::Client::new();
 
@@ -184,7 +193,7 @@ async fn download_async(
         .parse()
         .map_err(|err| PyException::new_err(format!("Error while downloading: {err:?}")))?;
 
-    let mut handles = vec![];
+    let mut handles = FuturesUnordered::new();
     let semaphore = Arc::new(Semaphore::new(max_files));
     let parallel_failures_semaphore = Arc::new(Semaphore::new(parallel_failures));
 
@@ -196,13 +205,13 @@ async fn download_async(
         let headers = headers.clone();
 
         let stop = std::cmp::min(start + chunk_size - 1, length);
-        let permit = semaphore
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|err| PyException::new_err(format!("Error while downloading: {err:?}")))?;
+        let semaphore = semaphore.clone();
         let parallel_failures_semaphore = parallel_failures_semaphore.clone();
         handles.push(tokio::spawn(async move {
+            let permit = semaphore
+                .acquire_owned()
+                .await
+                .map_err(|err| PyException::new_err(format!("Error while downloading: {err:?}")))?;
             let mut chunk = download_chunk(&client, &url, &filename, start, stop, headers.clone()).await;
             let mut i = 0;
             if parallel_failures > 0 {
@@ -227,15 +236,28 @@ async fn download_async(
                 }
             }
             drop(permit);
-            chunk
+            chunk.and(Ok(stop - start))
         }));
     }
 
     // Output the chained result
-    let results: Vec<Result<PyResult<()>, tokio::task::JoinError>> =
-        futures::future::join_all(handles).await;
-    let results: PyResult<()> = results.into_iter().flatten().collect();
-    results?;
+    while let Some(result) = handles.next().await {
+        match result {
+            Ok(Ok(size)) => {
+                if let Some(ref callback) = callback {
+                    callback.call(py, (size,), None)?;
+                }
+            }
+            Ok(Err(py_err)) => {
+                return Err(py_err);
+            }
+            Err(err) => {
+                return Err(PyException::new_err(format!(
+                    "Error while downloading: {err:?}"
+                )));
+            }
+        }
+    }
     Ok(())
 }
 
