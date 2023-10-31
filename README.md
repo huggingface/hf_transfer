@@ -8,7 +8,7 @@ This library is a power user tool, to go beyond `~500MB/s` on very high bandwidt
 network, where Python cannot cap out the available bandwidth.
 
 This is *not* meant to be a general usability tool.
-It purposefully lacks progressbars and comes generally as-is.
+Progressbar is experimentally implemented as callback.
 
 Please file issues *only* if there's an issue on the underlying downloaded file.
 
