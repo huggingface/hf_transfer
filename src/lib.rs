@@ -358,19 +358,19 @@ async fn upload_async(
                         }
                     }
                     drop(permit);
-                    chunk.and_then(|chunk| Ok((chunk, chunk_size)))
+                    chunk.and_then(|chunk| Ok((part_number, chunk, chunk_size)))
                 }));
     }
 
-    let mut results = vec![];
+    let mut results: Vec<HashMap<String, String>> = vec![HashMap::default(); parts_urls.len()];
 
     while let Some(result) = handles.next().await {
         match result {
-            Ok(Ok((headers, size))) => {
+            Ok(Ok((part_number, headers, size))) => {
                 if let Some(ref callback) = callback {
                     callback.call(py, (size,), None)?;
                 }
-                results.push(headers)
+                results[part_number] = headers;
             }
             Ok(Err(py_err)) => {
                 return Err(py_err);
