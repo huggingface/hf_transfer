@@ -325,13 +325,14 @@ async fn upload_async(
         let client = client.clone();
 
         let start = (part_number as u64) * chunk_size;
-        let permit = semaphore
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|err| PyException::new_err(format!("Error acquiring semaphore: {err}")))?;
+        let semaphore = semaphore.clone();
         let parallel_failures_semaphore = parallel_failures_semaphore.clone();
         handles.push(tokio::spawn(async move {
+                    let permit = semaphore
+                        .clone()
+                        .acquire_owned()
+                        .await
+                        .map_err(|err| PyException::new_err(format!("Error acquiring semaphore: {err}")))?;
                     let mut chunk = upload_chunk(&client, &url, &path, start, chunk_size).await;
                     let mut i = 0;
                     if parallel_failures > 0 {
