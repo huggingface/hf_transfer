@@ -376,7 +376,7 @@ async fn upload_async(
             }
             Err(err) => {
                 return Err(PyException::new_err(format!(
-                    "Error while downloading: {err:?}"
+                    "Error occurred while uploading: {err}"
                 )));
             }
         }
