@@ -96,14 +96,16 @@ fn download(
 /// See https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpuoverview.html for more information
 /// on the multipart upload
 #[pyfunction]
-#[pyo3(signature = (file_path, parts_urls, chunk_size, max_files, parallel_failures=0, max_retries=0))]
+#[pyo3(signature = (file_path, parts_urls, chunk_size, max_files, parallel_failures=0, max_retries=0, callback=None))]
 fn multipart_upload(
+    python: Python,
     file_path: String,
     parts_urls: Vec<String>,
     chunk_size: u64,
     max_files: usize,
     parallel_failures: usize,
     max_retries: usize,
+    callback: Option<Py<PyAny>>,
 ) -> PyResult<Vec<HashMap<String, String>>> {
     if parallel_failures > max_files {
         return Err(PyException::new_err(
@@ -122,12 +124,14 @@ fn multipart_upload(
         .build()?
         .block_on(async {
             upload_async(
+                python,
                 file_path,
                 parts_urls,
                 chunk_size,
                 max_files,
                 parallel_failures,
                 max_retries,
+                callback,
             )
             .await
         })
@@ -300,16 +304,18 @@ async fn download_chunk(
 }
 
 async fn upload_async(
+    py: Python<'_>,
     file_path: String,
     parts_urls: Vec<String>,
     chunk_size: u64,
     max_files: usize,
     parallel_failures: usize,
     max_retries: usize,
+    callback: Option<Py<PyAny>>,
 ) -> PyResult<Vec<HashMap<String, String>>> {
     let client = reqwest::Client::new();
 
-    let mut handles = vec![];
+    let mut handles = FuturesUnordered::new();
     let semaphore = Arc::new(Semaphore::new(max_files));
     let parallel_failures_semaphore = Arc::new(Semaphore::new(parallel_failures));
 
@@ -351,25 +357,32 @@ async fn upload_async(
                         }
                     }
                     drop(permit);
-                    chunk
+                    chunk.and_then(|chunk| Ok((chunk, chunk_size)))
                 }));
     }
 
-    let results: Vec<Result<PyResult<HashMap<String, String>>, tokio::task::JoinError>> =
-        futures::future::join_all(handles).await;
+    let mut results = vec![];
 
-    let results: PyResult<Vec<HashMap<String, String>>> = results
-        .into_iter()
-        .flat_map(|res| match res {
-            Ok(Ok(response)) => Some(Ok(response)),
-            Ok(Err(err)) => Some(Err(err)),
-            Err(err) => Some(Err(PyException::new_err(format!(
-                "Error occurred while uploading: {err}"
-            )))),
-        })
-        .collect();
+    while let Some(result) = handles.next().await {
+        match result {
+            Ok(Ok((headers, size))) => {
+                if let Some(ref callback) = callback {
+                    callback.call(py, (size,), None)?;
+                }
+                results.push(headers)
+            }
+            Ok(Err(py_err)) => {
+                return Err(py_err);
+            }
+            Err(err) => {
+                return Err(PyException::new_err(format!(
+                    "Error while downloading: {err:?}"
+                )));
+            }
+        }
+    }
 
-    results
+    Ok(results)
 }
 
 async fn upload_chunk(
