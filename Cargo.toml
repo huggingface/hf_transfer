@@ -10,7 +10,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 futures = "0.3.25"
-openssl = { version = "0.10.44", features = ["vendored"] }
+openssl = { version = "0.10.48", features = ["vendored"] }
 pyo3 = { version = "0.18.1", features = ["extension-module"] }
 rand = "0.8.5"
 reqwest = { version = "0.11" , features = ["stream"] }
