@@ -37,7 +37,31 @@ jobs:
           args: --release --out dist --find-interpreter
           sccache: 'true'
           manylinux: auto
-          before-script-linux: "yum install openssl-devel perl-IPC-Cmd -y"
+          before-script-linux: "yum install openssl-devel libatomic perl-IPC-Cmd -y"
+      - name: Upload wheels
+        uses: actions/upload-artifact@v3
+        with:
+          name: wheels
+          path: dist
+  linux2:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # target: [x86_64, x86, aarch64, armv7, s390x, ppc64le]
+        target: [aarch64, armv7, s390x, ppc64le]
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist --find-interpreter
+          sccache: 'true'
+          manylinux: auto
+          before-script-linux: "apt-get install openssl-dev -y"
       - name: Upload wheels
         uses: actions/upload-artifact@v3
         with:
