@@ -25,26 +25,10 @@ jobs:
       matrix:
         target: [x86_64, x86, aarch64, armv7, s390x, ppc64le]
     steps:
-<<<<<<< Updated upstream
     - uses: actions/checkout@v3
     - run: |
          sudo apt update && sudo apt install libssl-dev build-essential
          pkg-config --libs --cflags openssl
-    - uses: PyO3/maturin-action@v1
-      with:
-        manylinux: auto
-        command: build
-        args: --release --sdist -o dist --find-interpreter
-    - name: Upload wheels
-      uses: actions/upload-artifact@v3
-      with:
-        name: wheels
-        path: dist
-=======
-      - uses: actions/checkout@v3
-      - run: |
--         sudo apt update && sudo apt install libssl-dev
--         pkg-config --libs --cflags openssl
       - uses: actions/setup-python@v4
         with:
           python-version: '3.10'
@@ -60,8 +44,6 @@ jobs:
         with:
           name: wheels
           path: dist
->>>>>>> Stashed changes
-
   windows:
     runs-on: windows-latest
     strategy:
