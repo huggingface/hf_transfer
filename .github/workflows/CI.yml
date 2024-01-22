@@ -26,9 +26,6 @@ jobs:
         target: [x86_64, x86, aarch64, armv7, s390x, ppc64le]
     steps:
       - uses: actions/checkout@v3
-      - run: |
-         sudo apt update && sudo apt install libssl-dev build-essential libipc-run-perl
-         pkg-config --libs --cflags openssl
       - uses: actions/setup-python@v4
         with:
           python-version: '3.10'
@@ -39,7 +36,7 @@ jobs:
           args: --release --out dist --find-interpreter
           sccache: 'true'
           manylinux: auto
-          before-script-linux: "yum install openssl-devel -y"
+          before-script-linux: "yum install openssl-devel perl-IPC-Cmd -y"
       - name: Upload wheels
         uses: actions/upload-artifact@v3
         with:
