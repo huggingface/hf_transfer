@@ -10,6 +10,8 @@ on:
     branches:
       - main
       - master
+    tags:
+      - '*'
   pull_request:
   workflow_dispatch:
 
@@ -23,8 +25,8 @@ jobs:
       matrix:
         target: [x86_64, x86, aarch64, armv7, s390x, ppc64le]
     steps:
-    - uses: actions/checkout@v3
-    - run: |
+      - uses: actions/checkout@v3
+      - run: |
          sudo apt update && sudo apt install libssl-dev build-essential
          pkg-config --libs --cflags openssl
       - uses: actions/setup-python@v4
