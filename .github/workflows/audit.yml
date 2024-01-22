@@ -1,0 +1,11 @@
+name: Audit
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Audit
+        uses: actions-rs/cargo@v1
+        with:
+          command: audit
