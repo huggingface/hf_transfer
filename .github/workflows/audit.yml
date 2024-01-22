@@ -1,0 +1,10 @@
+name: Audit
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Audit
+        uses: actions-rs/cargo@v1
+        with:
+          command: audit
