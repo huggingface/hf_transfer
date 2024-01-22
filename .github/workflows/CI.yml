@@ -27,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - run: |
-         sudo apt update && sudo apt install libssl-dev build-essential
+         sudo apt update && sudo apt install libssl-dev build-essential libipc-run-perl
          pkg-config --libs --cflags openssl
       - uses: actions/setup-python@v4
         with:
