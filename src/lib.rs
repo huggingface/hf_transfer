@@ -10,6 +10,7 @@ use std::fs::remove_file;
 use std::io::SeekFrom;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
@@ -156,7 +157,11 @@ async fn download_async(
     input_headers: Option<HashMap<String, String>>,
     callback: Option<Py<PyAny>>,
 ) -> PyResult<()> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        // https://github.com/hyperium/hyper/issues/2136#issuecomment-589488526
+        .http2_keep_alive_timeout(Duration::from_secs(15))
+        .build()
+        .unwrap();
 
     let mut headers = HeaderMap::new();
     if let Some(input_headers) = input_headers {
