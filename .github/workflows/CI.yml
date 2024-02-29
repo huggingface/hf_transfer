@@ -58,10 +58,10 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --find-interpreter
+          args: --release --out dist -i python3.7 -i python3.8 -i python3.9 -i python3.10 -i python3.11 -i python3.12 
           sccache: 'true'
           manylinux: auto
-          before-script-linux: "apt-get install libssl-dev -y"
+          before-script-linux: "apt-get update && apt-get install libssl-dev -y"
       - name: Upload wheels
         uses: actions/upload-artifact@v3
         with:
