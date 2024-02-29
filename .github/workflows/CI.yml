@@ -61,7 +61,7 @@ jobs:
           args: --release --out dist --find-interpreter
           sccache: 'true'
           manylinux: auto
-          before-script-linux: "apt-get install libssl-dev -y"
+          before-script-linux: "apt-get update && apt-get install libssl-dev -y"
       - name: Upload wheels
         uses: actions/upload-artifact@v3
         with:
