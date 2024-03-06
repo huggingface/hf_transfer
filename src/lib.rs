@@ -163,6 +163,7 @@ async fn download_async(
 
     let mut headers = HeaderMap::new();
     if let Some(input_headers) = input_headers {
+        headers.reserve(input_headers.len());
         for (k, v) in input_headers {
             let k: HeaderName = k
                 .try_into()
