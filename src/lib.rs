@@ -27,6 +27,7 @@ const MAX_WAIT_TIME: usize = 10_000;
 ///
 /// The number of threads can be tuned by the environment variable `TOKIO_WORKER_THREADS` as documented in
 /// https://docs.rs/tokio/latest/tokio/runtime/struct.Builder.html#method.worker_threads
+#[allow(clippy::too_many_arguments)]
 #[pyfunction]
 #[pyo3(signature = (url, filename, max_files, chunk_size, parallel_failures=0, max_retries=0, headers=None, callback=None))]
 fn download(
@@ -94,6 +95,7 @@ fn download(
 ///
 /// See https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpuoverview.html for more information
 /// on the multipart upload
+#[allow(clippy::too_many_arguments)]
 #[pyfunction]
 #[pyo3(signature = (file_path, parts_urls, chunk_size, max_files, parallel_failures=0, max_retries=0, callback=None))]
 fn multipart_upload(
@@ -144,6 +146,7 @@ pub fn exponential_backoff(base_wait_time: usize, n: usize, max: usize) -> usize
     (base_wait_time + n.pow(2) + jitter()).min(max)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn download_async(
     py: Python<'_>,
     url: String,
@@ -306,6 +309,7 @@ async fn download_chunk(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn upload_async(
     py: Python<'_>,
     file_path: String,
