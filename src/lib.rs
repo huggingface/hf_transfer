@@ -73,11 +73,9 @@ fn download(
             if path.exists() {
                 match remove_file(filename) {
                     Ok(_) => err,
-                    Err(err) => {
-                        return PyException::new_err(format!(
-                            "Error while removing corrupted file: {err:?}"
-                        ));
-                    }
+                    Err(err) => PyException::new_err(format!(
+                        "Error while removing corrupted file: {err:?}"
+                    )),
                 }
             } else {
                 err
@@ -206,7 +204,6 @@ async fn download_async(
     let semaphore = Arc::new(Semaphore::new(max_files));
     let parallel_failures_semaphore = Arc::new(Semaphore::new(parallel_failures));
 
-    let chunk_size = chunk_size;
     for start in (0..length).step_by(chunk_size) {
         let url = url.clone();
         let filename = filename.clone();
@@ -237,7 +234,7 @@ async fn download_async(
                     })?;
 
                     let wait_time = exponential_backoff(BASE_WAIT_TIME, i, MAX_WAIT_TIME);
-                    sleep(tokio::time::Duration::from_millis(wait_time as u64)).await;
+                    sleep(Duration::from_millis(wait_time as u64)).await;
 
                     chunk = download_chunk(&client, &url, &filename, start, stop, headers.clone()).await;
                     i += 1;
@@ -280,7 +277,7 @@ async fn download_chunk(
 ) -> PyResult<()> {
     // Process each socket concurrently.
     let range = format!("bytes={start}-{stop}");
-    let mut file = tokio::fs::OpenOptions::new()
+    let mut file = OpenOptions::new()
         .write(true)
         .create(true)
         .open(filename)
@@ -355,7 +352,7 @@ async fn upload_async(
                             })?;
 
                             let wait_time = exponential_backoff(BASE_WAIT_TIME, i, MAX_WAIT_TIME);
-                            sleep(tokio::time::Duration::from_millis(wait_time as u64)).await;
+                            sleep(Duration::from_millis(wait_time as u64)).await;
 
                             chunk = upload_chunk(&client, &url, &path, start, chunk_size).await;
                             i += 1;
@@ -363,7 +360,7 @@ async fn upload_async(
                         }
                     }
                     drop(permit);
-                    chunk.and_then(|chunk| Ok((part_number, chunk, chunk_size)))
+                    chunk.map(|chunk| (part_number, chunk, chunk_size))
                 }));
     }
 
@@ -401,14 +398,14 @@ async fn upload_chunk(
     let mut options = OpenOptions::new();
     let mut file = options.read(true).open(path).await?;
     let file_size = file.metadata().await?.len();
-    let bytes_transfered = std::cmp::min(file_size - start, chunk_size);
+    let bytes_transferred = std::cmp::min(file_size - start, chunk_size);
 
     file.seek(SeekFrom::Start(start)).await?;
     let chunk = file.take(chunk_size);
 
     let response = client
         .put(url)
-        .header(CONTENT_LENGTH, bytes_transfered)
+        .header(CONTENT_LENGTH, bytes_transferred)
         .body(reqwest::Body::wrap_stream(FramedRead::new(
             chunk,
             BytesCodec::new(),
