@@ -11,4 +11,5 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: PyPy",
 ]
 
-
+[project.urls]
+Homepage = "https://github.com/huggingface/hf_transfer"
