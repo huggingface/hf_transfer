@@ -27,6 +27,7 @@ const MAX_WAIT_TIME: usize = 10_000;
 ///
 /// The number of threads can be tuned by the environment variable `TOKIO_WORKER_THREADS` as documented in
 /// https://docs.rs/tokio/latest/tokio/runtime/struct.Builder.html#method.worker_threads
+#[allow(clippy::too_many_arguments)]
 #[pyfunction]
 #[pyo3(signature = (url, filename, max_files, chunk_size, parallel_failures=0, max_retries=0, headers=None, callback=None))]
 fn download(
@@ -73,11 +74,9 @@ fn download(
             if path.exists() {
                 match remove_file(filename) {
                     Ok(_) => err,
-                    Err(err) => {
-                        return PyException::new_err(format!(
-                            "Error while removing corrupted file: {err:?}"
-                        ));
-                    }
+                    Err(err) => PyException::new_err(format!(
+                        "Error while removing corrupted file: {err:?}"
+                    )),
                 }
             } else {
                 err
@@ -96,6 +95,7 @@ fn download(
 ///
 /// See https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpuoverview.html for more information
 /// on the multipart upload
+#[allow(clippy::too_many_arguments)]
 #[pyfunction]
 #[pyo3(signature = (file_path, parts_urls, chunk_size, max_files, parallel_failures=0, max_retries=0, callback=None))]
 fn multipart_upload(
@@ -146,6 +146,7 @@ pub fn exponential_backoff(base_wait_time: usize, n: usize, max: usize) -> usize
     (base_wait_time + n.pow(2) + jitter()).min(max)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn download_async(
     py: Python<'_>,
     url: String,
@@ -191,6 +192,10 @@ async fn download_async(
         .to_str()
         .map_err(|err| PyException::new_err(format!("Error while downloading: {err:?}")))?;
 
+    // Only call the final redirect URL to avoid overloading the Hub with requests and also
+    // altering the download count
+    let redirected_url = response.url().to_string();
+
     let size: Vec<&str> = content_range.split('/').collect();
     // Content-Range: bytes 0-0/702517648
     // https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Range
@@ -206,9 +211,8 @@ async fn download_async(
     let semaphore = Arc::new(Semaphore::new(max_files));
     let parallel_failures_semaphore = Arc::new(Semaphore::new(parallel_failures));
 
-    let chunk_size = chunk_size;
     for start in (0..length).step_by(chunk_size) {
-        let url = url.clone();
+        let url = redirected_url.clone();
         let filename = filename.clone();
         let client = client.clone();
         let headers = headers.clone();
@@ -282,6 +286,7 @@ async fn download_chunk(
     let range = format!("bytes={start}-{stop}");
     let mut file = tokio::fs::OpenOptions::new()
         .write(true)
+        .truncate(false)
         .create(true)
         .open(filename)
         .await
@@ -308,6 +313,7 @@ async fn download_chunk(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn upload_async(
     py: Python<'_>,
     file_path: String,
@@ -363,7 +369,7 @@ async fn upload_async(
                         }
                     }
                     drop(permit);
-                    chunk.and_then(|chunk| Ok((part_number, chunk, chunk_size)))
+                    chunk.map(|chunk| (part_number, chunk, chunk_size))
                 }));
     }
 
