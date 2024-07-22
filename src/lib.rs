@@ -31,7 +31,6 @@ const MAX_WAIT_TIME: usize = 10_000;
 #[pyfunction]
 #[pyo3(signature = (url, filename, max_files, chunk_size, parallel_failures=0, max_retries=0, headers=None, callback=None))]
 fn download(
-    python: Python,
     url: String,
     filename: String,
     max_files: usize,
@@ -39,7 +38,7 @@ fn download(
     parallel_failures: usize,
     max_retries: usize,
     headers: Option<HashMap<String, String>>,
-    callback: Option<Py<PyAny>>,
+    callback: Option<Bound<'_, PyAny>>,
 ) -> PyResult<()> {
     if parallel_failures > max_files {
         return Err(PyException::new_err(
@@ -57,7 +56,6 @@ fn download(
         .build()?
         .block_on(async {
             download_async(
-                python,
                 url,
                 filename.clone(),
                 max_files,
@@ -99,14 +97,13 @@ fn download(
 #[pyfunction]
 #[pyo3(signature = (file_path, parts_urls, chunk_size, max_files, parallel_failures=0, max_retries=0, callback=None))]
 fn multipart_upload(
-    python: Python,
     file_path: String,
     parts_urls: Vec<String>,
     chunk_size: u64,
     max_files: usize,
     parallel_failures: usize,
     max_retries: usize,
-    callback: Option<Py<PyAny>>,
+    callback: Option<Bound<'_, PyAny>>,
 ) -> PyResult<Vec<HashMap<String, String>>> {
     if parallel_failures > max_files {
         return Err(PyException::new_err(
@@ -125,7 +122,6 @@ fn multipart_upload(
         .build()?
         .block_on(async {
             upload_async(
-                python,
                 file_path,
                 parts_urls,
                 chunk_size,
@@ -148,7 +144,6 @@ pub fn exponential_backoff(base_wait_time: usize, n: usize, max: usize) -> usize
 
 #[allow(clippy::too_many_arguments)]
 async fn download_async(
-    py: Python<'_>,
     url: String,
     filename: String,
     max_files: usize,
@@ -156,7 +151,7 @@ async fn download_async(
     parallel_failures: usize,
     max_retries: usize,
     input_headers: Option<HashMap<String, String>>,
-    callback: Option<Py<PyAny>>,
+    callback: Option<Bound<'_, PyAny>>,
 ) -> PyResult<()> {
     let client = reqwest::Client::builder()
         // https://github.com/hyperium/hyper/issues/2136#issuecomment-589488526
@@ -258,7 +253,7 @@ async fn download_async(
         match result {
             Ok(Ok(size)) => {
                 if let Some(ref callback) = callback {
-                    callback.call(py, (size,), None)?;
+                    callback.call((size,), None)?;
                 }
             }
             Ok(Err(py_err)) => {
@@ -315,14 +310,13 @@ async fn download_chunk(
 
 #[allow(clippy::too_many_arguments)]
 async fn upload_async(
-    py: Python<'_>,
     file_path: String,
     parts_urls: Vec<String>,
     chunk_size: u64,
     max_files: usize,
     parallel_failures: usize,
     max_retries: usize,
-    callback: Option<Py<PyAny>>,
+    callback: Option<Bound<'_, PyAny>>,
 ) -> PyResult<Vec<HashMap<String, String>>> {
     let client = reqwest::Client::new();
 
@@ -379,7 +373,7 @@ async fn upload_async(
         match result {
             Ok(Ok((part_number, headers, size))) => {
                 if let Some(ref callback) = callback {
-                    callback.call(py, (size,), None)?;
+                    callback.call((size,), None)?;
                 }
                 results[part_number] = headers;
             }
@@ -446,9 +440,9 @@ async fn upload_chunk(
 
 /// A Python module implemented in Rust.
 #[pymodule]
-fn hf_transfer(_py: Python, m: &PyModule) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(download, m)?)?;
-    m.add_function(wrap_pyfunction!(multipart_upload, m)?)?;
-    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+fn hf_transfer(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_function(wrap_pyfunction!(download, module)?)?;
+    module.add_function(wrap_pyfunction!(multipart_upload, module)?)?;
+    module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }
