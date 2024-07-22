@@ -15,4 +15,4 @@ classifiers = [
 
 [project.urls]
 Issues = "https://github.com/huggingface/hf_transfer/issues"
-Source = "https://github.com/huggingface/hf_transfer"
+Repository = "https://github.com/huggingface/hf_transfer.git"
