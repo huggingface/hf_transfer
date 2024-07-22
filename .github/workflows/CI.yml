@@ -41,8 +41,9 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels
+          name: "wheels-linux-${{ matrix.target }}"
           path: dist
+
   linux2:
     runs-on: ubuntu-latest
     strategy:
@@ -65,8 +66,9 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels
+          name: "wheels-linux2-${{ matrix.target }}"
           path: dist
+
   windows:
     runs-on: windows-latest
     strategy:
@@ -87,7 +89,7 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels
+          name: "wheels-windows-${{ matrix.target }}"
           path: dist
 
   macos:
@@ -109,7 +111,7 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels
+          name: "wheels-macos-${{ matrix.target }}"
           path: dist
 
   tests:
@@ -126,13 +128,12 @@ jobs:
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
-          target: ${{ matrix.target }}
-          args: --release --out dist --find-interpreter
+          command: develop
           sccache: 'true'
       - name: Install huggingface_hub dependencies
         run: python3 -m pip install -e 'huggingface_hub[testing]'
       - name: Run tests
-        run: HF_HUB_ENABLE_HF_TRANSFER=1 pytest tests/test_file_download.py
+        run: HF_HUB_ENABLE_HF_TRANSFER=1 pytest huggingface_hub/tests/test_file_download.py
 
   sdist:
     runs-on: ubuntu-latest
@@ -146,7 +147,7 @@ jobs:
       - name: Upload sdist
         uses: actions/upload-artifact@v4
         with:
-          name: wheels
+          name: wheels-sdist
           path: dist
 
   release:
@@ -156,8 +157,45 @@ jobs:
     needs: [linux, windows, macos, sdist]
     steps:
       - uses: actions/download-artifact@v4
+        name: download linux x86_64 artifacts
         with:
-          name: wheels
+          name: wheels-linux-x86_64
+      - uses: actions/download-artifact@v4
+        name: download linux x86 artifacts
+        with:
+          name: wheels-linux-x86
+      - uses: actions/download-artifact@v4
+        name: download linux2 aarch64 artifacts
+        with:
+          name: wheels-linux2-aarch64
+      - uses: actions/download-artifact@v4
+        name: download linux2 armv7 artifacts
+        with:
+          name: wheels-linux2-armv7
+      - uses: actions/download-artifact@v4
+        name: download linux2 ppc64le artifacts
+        with:
+          name: wheels-linux2-ppc64le
+      - uses: actions/download-artifact@v4
+        name: download macos x86_64 artifacts
+        with:
+          name: wheels-macos-x86_64
+      - uses: actions/download-artifact@v4
+        name: download macos aarch64 artifacts
+        with:
+          name: wheels-macos-aarch64
+      - uses: actions/download-artifact@v4
+        name: download windows x64 artifacts
+        with:
+          name: wheels-windows-x64
+      - uses: actions/download-artifact@v4
+        name: download windows x86 artifacts
+        with:
+          name: wheels-windows-x86
+      - uses: actions/download-artifact@v4
+        name: download sdist artifacts
+        with:
+          name: wheels-sdist
       - name: Publish to PyPI
         uses: PyO3/maturin-action@v1
         env:
