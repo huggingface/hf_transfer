@@ -26,8 +26,8 @@ jobs:
         # target: [x86_64, x86, aarch64, armv7, s390x, ppc64le]
         target: [x86_64, x86]
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
       - name: Build wheels
@@ -39,10 +39,11 @@ jobs:
           manylinux: auto
           before-script-linux: "yum install openssl-devel devtoolset-10-libatomic-devel perl-IPC-Cmd -y"
       - name: Upload wheels
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: wheels
+          name: "wheels-linux-${{ matrix.target }}"
           path: dist
+
   linux2:
     runs-on: ubuntu-latest
     strategy:
@@ -50,8 +51,8 @@ jobs:
         # target: [x86_64, x86, aarch64, armv7, s390x, ppc64le]
         target: [aarch64, armv7, ppc64le]
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
       - name: Build wheels
@@ -63,18 +64,19 @@ jobs:
           manylinux: auto
           before-script-linux: "apt-get update && apt-get install libssl-dev -y"
       - name: Upload wheels
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: wheels
+          name: "wheels-linux2-${{ matrix.target }}"
           path: dist
+
   windows:
     runs-on: windows-latest
     strategy:
       matrix:
         target: [x64, x86]
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
           architecture: ${{ matrix.target }}
@@ -85,9 +87,9 @@ jobs:
           args: --release --out dist --find-interpreter
           sccache: 'true'
       - name: Upload wheels
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: wheels
+          name: "wheels-windows-${{ matrix.target }}"
           path: dist
 
   macos:
@@ -96,8 +98,8 @@ jobs:
       matrix:
         target: [x86_64, aarch64]
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
       - name: Build wheels
@@ -107,24 +109,52 @@ jobs:
           args: --release --out dist --find-interpreter
           sccache: 'true'
       - name: Upload wheels
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: wheels
+          name: "wheels-macos-${{ matrix.target }}"
           path: dist
+
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: huggingface/huggingface_hub
+          path: huggingface_hub
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Create venv
+        run: python3 -m venv .venv
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          command: develop
+          sccache: 'true'
+      - name: Install huggingface_hub dependencies
+        run: |
+          source .venv/bin/activate
+          python3 -m pip install -e 'huggingface_hub[testing]'
+      - name: Run tests
+        run: |
+          source .venv/bin/activate
+          HF_HUB_ENABLE_HF_TRANSFER=1 pytest huggingface_hub/tests/test_file_download.py
+          HF_HUB_ENABLE_HF_TRANSFER=1 pytest huggingface_hub/tests/test_hf_api.py -k 'test_upload_lfs_file_multipart'
 
   sdist:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Build sdist
         uses: PyO3/maturin-action@v1
         with:
           command: sdist
           args: --out dist
       - name: Upload sdist
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: wheels
+          name: wheels-sdist
           path: dist
 
   release:
@@ -133,9 +163,46 @@ jobs:
     if: "startsWith(github.ref, 'refs/tags/')"
     needs: [linux, windows, macos, sdist]
     steps:
-      - uses: actions/download-artifact@v3
+      - uses: actions/download-artifact@v4
+        name: download linux x86_64 artifacts
         with:
-          name: wheels
+          name: wheels-linux-x86_64
+      - uses: actions/download-artifact@v4
+        name: download linux x86 artifacts
+        with:
+          name: wheels-linux-x86
+      - uses: actions/download-artifact@v4
+        name: download linux2 aarch64 artifacts
+        with:
+          name: wheels-linux2-aarch64
+      - uses: actions/download-artifact@v4
+        name: download linux2 armv7 artifacts
+        with:
+          name: wheels-linux2-armv7
+      - uses: actions/download-artifact@v4
+        name: download linux2 ppc64le artifacts
+        with:
+          name: wheels-linux2-ppc64le
+      - uses: actions/download-artifact@v4
+        name: download macos x86_64 artifacts
+        with:
+          name: wheels-macos-x86_64
+      - uses: actions/download-artifact@v4
+        name: download macos aarch64 artifacts
+        with:
+          name: wheels-macos-aarch64
+      - uses: actions/download-artifact@v4
+        name: download windows x64 artifacts
+        with:
+          name: wheels-windows-x64
+      - uses: actions/download-artifact@v4
+        name: download windows x86 artifacts
+        with:
+          name: wheels-windows-x86
+      - uses: actions/download-artifact@v4
+        name: download sdist artifacts
+        with:
+          name: wheels-sdist
       - name: Publish to PyPI
         uses: PyO3/maturin-action@v1
         env:
