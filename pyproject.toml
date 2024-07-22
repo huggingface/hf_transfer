@@ -4,6 +4,8 @@ build-backend = "maturin"
 
 [project]
 name = "hf_transfer"
+description = "Speed up file transfers with the Hugging Face Hub."
+readme = "README.md"
 requires-python = ">=3.7"
 classifiers = [
     "Programming Language :: Rust",
@@ -11,4 +13,6 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: PyPy",
 ]
 
-
+[project.urls]
+Issues = "https://github.com/huggingface/hf_transfer/issues"
+Repository = "https://github.com/huggingface/hf_transfer.git"
