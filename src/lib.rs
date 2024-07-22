@@ -180,16 +180,16 @@ async fn download_async(
         .await
         .map_err(|err| PyException::new_err(format!("Error while downloading: {err:?}")))?;
 
+    // Only call the final redirect URL to avoid overloading the Hub with requests and also
+    // altering the download count
+    let redirected_url = response.url().to_string();
+
     let content_range = response
         .headers()
         .get(CONTENT_RANGE)
         .ok_or(PyException::new_err("No content length"))?
         .to_str()
         .map_err(|err| PyException::new_err(format!("Error while downloading: {err:?}")))?;
-
-    // Only call the final redirect URL to avoid overloading the Hub with requests and also
-    // altering the download count
-    let redirected_url = response.url().to_string();
 
     let size: Vec<&str> = content_range.split('/').collect();
     // Content-Range: bytes 0-0/702517648
