@@ -4,7 +4,9 @@ use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use rand::{thread_rng, Rng};
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_LENGTH, CONTENT_RANGE, RANGE};
+use reqwest::header::{
+    HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_LENGTH, CONTENT_RANGE, RANGE,
+};
 use std::collections::HashMap;
 use std::fs::remove_file;
 use std::io::SeekFrom;
@@ -160,25 +162,33 @@ async fn download_async(
         .unwrap();
 
     let mut headers = HeaderMap::new();
+    let mut auth_token = None;
     if let Some(input_headers) = input_headers {
         for (k, v) in input_headers {
-            let k: HeaderName = k
+            let name: HeaderName = k
                 .try_into()
                 .map_err(|err| PyException::new_err(format!("Invalid header: {err:?}")))?;
-            let v: HeaderValue = v
+            let value: HeaderValue = AsRef::<str>::as_ref(&v)
                 .try_into()
                 .map_err(|err| PyException::new_err(format!("Invalid header value: {err:?}")))?;
-            headers.insert(k, v);
+            if name == AUTHORIZATION {
+                auth_token = Some(v);
+            } else {
+                headers.insert(name, value);
+            }
         }
     };
 
-    let response = client
-        .get(&url)
-        .headers(headers.clone())
-        .header(RANGE, "bytes=0-0")
-        .send()
-        .await
-        .map_err(|err| PyException::new_err(format!("Error while downloading: {err:?}")))?;
+    let response = if let Some(token) = auth_token {
+        client.get(&url).bearer_auth(token)
+    } else {
+        client.get(&url)
+    }
+    .headers(headers.clone())
+    .header(RANGE, "bytes=0-0")
+    .send()
+    .await
+    .map_err(|err| PyException::new_err(format!("Error while downloading: {err:?}")))?;
 
     // Only call the final redirect URL to avoid overloading the Hub with requests and also
     // altering the download count
