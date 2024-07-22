@@ -140,6 +140,7 @@ jobs:
         run: |
           source .venv/bin/activate
           HF_HUB_ENABLE_HF_TRANSFER=1 pytest huggingface_hub/tests/test_file_download.py
+          HF_HUB_ENABLE_HF_TRANSFER=1 pytest huggingface_hub/tests/test_hf_api.py -k 'test_upload_lfs_file_multipart'
 
   sdist:
     runs-on: ubuntu-latest
