@@ -189,7 +189,9 @@ async fn download_async(
     .header(RANGE, "bytes=0-0")
     .send()
     .await
-    .map_err(|err| PyException::new_err(format!("Error while downloading: {err:?}")))?;
+    .map_err(|err| PyException::new_err(format!("Error while downloading: {err:?}")))?
+    .error_for_status()
+    .map_err(|err| PyException::new_err(err.to_string()))?;
 
     // Only call the final redirect URL to avoid overloading the Hub with requests and also
     // altering the download count
