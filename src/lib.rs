@@ -164,6 +164,7 @@ async fn download_async(
     let mut headers = HeaderMap::new();
     let mut auth_token = None;
     if let Some(input_headers) = input_headers {
+        headers.reserve(input_headers.len());
         for (k, v) in input_headers {
             let name: HeaderName = k
                 .try_into()
@@ -246,7 +247,7 @@ async fn download_async(
                     })?;
 
                     let wait_time = exponential_backoff(BASE_WAIT_TIME, i, MAX_WAIT_TIME);
-                    sleep(tokio::time::Duration::from_millis(wait_time as u64)).await;
+                    sleep(Duration::from_millis(wait_time as u64)).await;
 
                     chunk = download_chunk(&client, &url, &filename, start, stop, headers.clone()).await;
                     i += 1;
@@ -289,7 +290,7 @@ async fn download_chunk(
 ) -> PyResult<()> {
     // Process each socket concurrently.
     let range = format!("bytes={start}-{stop}");
-    let mut file = tokio::fs::OpenOptions::new()
+    let mut file = OpenOptions::new()
         .write(true)
         .truncate(false)
         .create(true)
@@ -365,7 +366,7 @@ async fn upload_async(
                             })?;
 
                             let wait_time = exponential_backoff(BASE_WAIT_TIME, i, MAX_WAIT_TIME);
-                            sleep(tokio::time::Duration::from_millis(wait_time as u64)).await;
+                            sleep(Duration::from_millis(wait_time as u64)).await;
 
                             chunk = upload_chunk(&client, &url, &path, start, chunk_size).await;
                             i += 1;
@@ -411,14 +412,14 @@ async fn upload_chunk(
     let mut options = OpenOptions::new();
     let mut file = options.read(true).open(path).await?;
     let file_size = file.metadata().await?.len();
-    let bytes_transfered = std::cmp::min(file_size - start, chunk_size);
+    let bytes_transferred = std::cmp::min(file_size - start, chunk_size);
 
     file.seek(SeekFrom::Start(start)).await?;
     let chunk = file.take(chunk_size);
 
     let response = client
         .put(url)
-        .header(CONTENT_LENGTH, bytes_transfered)
+        .header(CONTENT_LENGTH, bytes_transferred)
         .body(reqwest::Body::wrap_stream(FramedRead::new(
             chunk,
             BytesCodec::new(),
