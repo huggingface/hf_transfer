@@ -174,7 +174,7 @@ async fn download_async(
                 .try_into()
                 .map_err(|err| PyException::new_err(format!("Invalid header value: {err}")))?;
             if name == AUTHORIZATION {
-                auth_token = Some(v);
+                auth_token = Some(value);
             } else {
                 headers.insert(name, value);
             }
@@ -182,7 +182,7 @@ async fn download_async(
     };
 
     let response = if let Some(token) = auth_token.as_ref() {
-        client.get(&url).bearer_auth(token)
+        client.get(&url).header(AUTHORIZATION, token)
     } else {
         client.get(&url)
     }
@@ -203,12 +203,7 @@ async fn download_async(
         == redirected_url.host()
     {
         if let Some(token) = auth_token {
-            headers.insert(
-                AUTHORIZATION,
-                token
-                    .try_into()
-                    .map_err(|err| PyException::new_err(format!("Invalid header value: {err}")))?,
-            );
+            headers.insert(AUTHORIZATION, token);
         }
     }
 
