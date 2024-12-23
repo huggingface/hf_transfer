@@ -28,21 +28,19 @@ jobs:
             target: x86_64
           - runner: ubuntu-22.04
             target: x86
-          - runner: ubuntu-22.04
-            target: aarch64
-          - runner: ubuntu-22.04
-            target: armv7
-          - runner: ubuntu-22.04
-            target: s390x
-          - runner: ubuntu-22.04
-            target: ppc64le
+            # - runner: ubuntu-22.04
+            #   target: aarch64
+            # - runner: ubuntu-22.04
+            #   target: armv7
+            # - runner: ubuntu-22.04
+            #   target: s390x
+            # - runner: ubuntu-22.04
+            #   target: ppc64le
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: 3.x
-      - name: Get openssl
-        run: sudo apt-get install libssl-dev -y
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -50,6 +48,8 @@ jobs:
           args: --release --out dist
           sccache: 'true'
           manylinux: auto
+           #before-script-linux: "apt-get update && apt-get install libssl-dev -y"
+          before-script-linux: "yum install openssl-devel devtoolset-10-libatomic-devel perl-IPC-Cmd -y"
       - name: Build free-threaded wheels
         uses: PyO3/maturin-action@v1
         with:
