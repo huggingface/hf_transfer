@@ -42,7 +42,7 @@ jobs:
         with:
           python-version: 3.x
       - name: Get openssl
-        run: sudo apt-get install openssl-dev -y
+        run: sudo apt-get install libssl-dev -y
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
