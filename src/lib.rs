@@ -20,7 +20,7 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::sync::Semaphore;
 use tokio::time::sleep;
 use tokio_util::codec::{BytesCodec, FramedRead};
-
+use simple_error::{simple_error,SimpleResult};
 const BASE_WAIT_TIME: usize = 300;
 const MAX_WAIT_TIME: usize = 10_000;
 
@@ -212,16 +212,16 @@ async fn download_async(
         .get(CONTENT_RANGE)
         .ok_or(PyException::new_err("No content length"))?
         .to_str()
-        .map_err(|err| PyException::new_err(format!("Error while downloading: {err}")))?;
+        .map_err(|err|PyException::new_err(format!("Error while downloading: {err}")))?;
 
     let size: Vec<&str> = content_range.split('/').collect();
     // Content-Range: bytes 0-0/702517648
     // https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Range
     let length: usize = size
         .last()
-        .ok_or(PyException::new_err(
-            "Error while downloading: No size was detected",
-        ))?
+        .ok_or(PyException::new_err(format!(
+            "Error while downloading: No size was detected"
+        )))?
         .parse()
         .map_err(|err| PyException::new_err(format!("Error while downloading: {err}")))?;
 
@@ -242,20 +242,20 @@ async fn download_async(
             let permit = semaphore
                 .acquire_owned()
                 .await
-                .map_err(|err| PyException::new_err(format!("Error while downloading: {err}")))?;
+                .map_err(|err| simple_error!("Error while downloading: {err}"))?;
             let mut chunk = download_chunk(&client, &url, &filename, start, stop, headers.clone()).await;
             let mut i = 0;
             if parallel_failures > 0 {
                 while let Err(dlerr) = chunk {
                     if i >= max_retries {
-                        return Err(PyException::new_err(format!(
+                        return Err(simple_error!(
                             "Failed after too many retries ({max_retries}): {dlerr}"
-                        )));
+                        ));
                     }
                     let parallel_failure_permit = parallel_failures_semaphore.clone().try_acquire_owned().map_err(|err| {
-                        PyException::new_err(format!(
+                        simple_error!(
                             "Failed too many failures in parallel ({parallel_failures}): {dlerr} ({err})"
-                        ))
+                        )
                     })?;
 
                     let wait_time = exponential_backoff(BASE_WAIT_TIME, i, MAX_WAIT_TIME);
@@ -280,7 +280,7 @@ async fn download_async(
                 }
             }
             Ok(Err(py_err)) => {
-                return Err(py_err);
+                return Err(PyException::new_err(py_err.to_string()));
             }
             Err(err) => {
                 return Err(PyException::new_err(format!(
@@ -299,7 +299,7 @@ async fn download_chunk(
     start: usize,
     stop: usize,
     headers: HeaderMap,
-) -> PyResult<()> {
+) -> SimpleResult<()> {
     // Process each socket concurrently.
     let range = format!("bytes={start}-{stop}");
     let mut file = OpenOptions::new()
@@ -308,26 +308,26 @@ async fn download_chunk(
         .create(true)
         .open(filename)
         .await
-        .map_err(|err| PyException::new_err(format!("Error while downloading: {err}")))?;
+        .map_err(|err| simple_error!("Error while downloading: {err}"))?;
     file.seek(SeekFrom::Start(start as u64))
         .await
-        .map_err(|err| PyException::new_err(format!("Error while downloading: {err}")))?;
+        .map_err(|err| simple_error!("Error while downloading: {err}"))?;
     let response = client
         .get(url)
         .headers(headers)
         .header(RANGE, range)
         .send()
         .await
-        .map_err(|err| PyException::new_err(format!("Error while downloading: {err}")))?
+        .map_err(|err| simple_error!("Error while downloading: {err}"))?
         .error_for_status()
-        .map_err(|err| PyException::new_err(format!("Error while downloading: {err}")))?;
+        .map_err(|err| simple_error!("Error while downloading: {err}"))?;
     let content = response
         .bytes()
         .await
-        .map_err(|err| PyException::new_err(format!("Error while downloading: {err}")))?;
+        .map_err(|err| simple_error!("Error while downloading: {err}"))?;
     file.write_all(&content)
         .await
-        .map_err(|err| PyException::new_err(format!("Error while downloading: {err}")))?;
+        .map_err(|err| simple_error!("Error while downloading: {err}"))?;
     Ok(())
 }
 
@@ -386,7 +386,7 @@ async fn upload_async(
                         }
                     }
                     drop(permit);
-                    chunk.map(|chunk| (part_number, chunk, chunk_size))
+                    chunk.map(|chunk| (part_number, chunk, chunk_size)).map_err(|err|PyException::new_err(err.to_string()))
                 }));
     }
 
@@ -420,13 +420,13 @@ async fn upload_chunk(
     path: &str,
     start: u64,
     chunk_size: u64,
-) -> PyResult<HashMap<String, String>> {
+) -> SimpleResult<HashMap<String, String>> {
     let mut options = OpenOptions::new();
-    let mut file = options.read(true).open(path).await?;
-    let file_size = file.metadata().await?.len();
+    let mut file = options.read(true).open(path).await.map_err(|err| simple_error!("Error opening file: {err}"))?;
+    let file_size = file.metadata().await.map_err(|err| simple_error!("Error getting file metadata: {err}"))?.len();
     let bytes_transferred = std::cmp::min(file_size - start, chunk_size);
 
-    file.seek(SeekFrom::Start(start)).await?;
+    file.seek(SeekFrom::Start(start)).await.map_err(|err| simple_error!("Error seeking file: {err}"))?;
     let chunk = file.take(chunk_size);
 
     let response = client
@@ -438,12 +438,12 @@ async fn upload_chunk(
         )))
         .send()
         .await
-        .map_err(|err| PyException::new_err(format!("Error sending chunk: {err}")))?
+        .map_err(|err| simple_error!("Error sending chunk: {err}"))?
         .error_for_status()
         .map_err(|err| {
-            PyException::new_err(format!(
+            simple_error!(
                 "Server responded with error status code while upload chunk: {err}"
-            ))
+            )
         })?;
 
     let mut headers = HashMap::new();
@@ -453,7 +453,7 @@ async fn upload_chunk(
             value
                 .to_str()
                 .map_err(|err| {
-                    PyException::new_err(format!("Response header contains non ASCII chars: {err}"))
+                    simple_error!("Response header contains non ASCII chars: {err}")
                 })?
                 .to_owned(),
         );

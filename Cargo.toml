@@ -16,3 +16,4 @@ rand = "0.8.5"
 reqwest = { version = "0.12.5", features = ["stream"] }
 tokio = { version = "1.38.1", features = ["rt", "rt-multi-thread", "fs"] }
 tokio-util = { version = "0.7", features = ["codec"] }
+simple-error = "0.3.1"
