@@ -48,7 +48,7 @@ jobs:
           args: --release --out dist
           sccache: 'true'
           manylinux: auto
-          before-script-linux: "yum install openssl-devel devtoolset-10-libatomic-devel perl-IPC-Cmd -y"
+          before-script-linux: "apt-get install openssl-dev -y"
       - name: Build free-threaded wheels
         uses: PyO3/maturin-action@v1
         with:
