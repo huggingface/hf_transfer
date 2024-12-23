@@ -12,6 +12,7 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: Implementation :: PyPy",
 ]
+dynamic = ["version"]
 
 [project.urls]
 Issues = "https://github.com/huggingface/hf_transfer/issues"

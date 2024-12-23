@@ -5,10 +5,12 @@ use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use rand::{thread_rng, Rng};
 use reqwest::header::{
-    HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_LENGTH, CONTENT_RANGE, RANGE,
+    HeaderMap, HeaderName, HeaderValue, ToStrError, AUTHORIZATION, CONTENT_LENGTH, CONTENT_RANGE,
+    RANGE,
 };
 use reqwest::Url;
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::fs::remove_file;
 use std::io::SeekFrom;
 use std::path::Path;
@@ -267,7 +269,7 @@ async fn download_async(
                 }
             }
             drop(permit);
-            chunk.and(Ok(stop - start))
+            chunk.map_err(|e| PyException::new_err(format!("Downloading error {e}"))).and(Ok(stop - start))
         }));
     }
 
@@ -292,6 +294,43 @@ async fn download_async(
     Ok(())
 }
 
+#[derive(Debug)]
+enum Error {
+    Io(std::io::Error),
+    Request(reqwest::Error),
+    ToStrError(ToStrError),
+}
+
+impl From<std::io::Error> for Error {
+    fn from(value: std::io::Error) -> Self {
+        Self::Io(value)
+    }
+}
+
+impl From<reqwest::Error> for Error {
+    fn from(value: reqwest::Error) -> Self {
+        Self::Request(value)
+    }
+}
+
+impl From<ToStrError> for Error {
+    fn from(value: ToStrError) -> Self {
+        Self::ToStrError(value)
+    }
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(io) => write!(f, "Io: {io}"),
+            Self::Request(req) => write!(f, "Request: {req}"),
+            Self::ToStrError(req) => write!(f, "Response non ascii: {req}"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
 async fn download_chunk(
     client: &reqwest::Client,
     url: &str,
@@ -299,7 +338,7 @@ async fn download_chunk(
     start: usize,
     stop: usize,
     headers: HeaderMap,
-) -> PyResult<()> {
+) -> Result<(), Error> {
     // Process each socket concurrently.
     let range = format!("bytes={start}-{stop}");
     let mut file = OpenOptions::new()
@@ -307,27 +346,17 @@ async fn download_chunk(
         .truncate(false)
         .create(true)
         .open(filename)
-        .await
-        .map_err(|err| PyException::new_err(format!("Error while downloading: {err}")))?;
-    file.seek(SeekFrom::Start(start as u64))
-        .await
-        .map_err(|err| PyException::new_err(format!("Error while downloading: {err}")))?;
+        .await?;
+    file.seek(SeekFrom::Start(start as u64)).await?;
     let response = client
         .get(url)
         .headers(headers)
         .header(RANGE, range)
         .send()
-        .await
-        .map_err(|err| PyException::new_err(format!("Error while downloading: {err}")))?
-        .error_for_status()
-        .map_err(|err| PyException::new_err(format!("Error while downloading: {err}")))?;
-    let content = response
-        .bytes()
-        .await
-        .map_err(|err| PyException::new_err(format!("Error while downloading: {err}")))?;
-    file.write_all(&content)
-        .await
-        .map_err(|err| PyException::new_err(format!("Error while downloading: {err}")))?;
+        .await?
+        .error_for_status()?;
+    let content = response.bytes().await?;
+    file.write_all(&content).await?;
     Ok(())
 }
 
@@ -386,7 +415,13 @@ async fn upload_async(
                         }
                     }
                     drop(permit);
-                    chunk.map(|chunk| (part_number, chunk, chunk_size))
+                    chunk.map_err(|e|{
+                        match e {
+                            Error::Io(io) => PyException::new_err(format!("Io error {io}")),
+                            Error::Request(req) => PyException::new_err(format!("Error while sending chunk {req}")),
+                            Error::ToStrError(req) => PyException::new_err(format!("Response header contains non ASCII chars: {req}")),
+                        }
+                    }).map(|chunk| (part_number, chunk, chunk_size))
                 }));
     }
 
@@ -420,7 +455,7 @@ async fn upload_chunk(
     path: &str,
     start: u64,
     chunk_size: u64,
-) -> PyResult<HashMap<String, String>> {
+) -> Result<HashMap<String, String>, Error> {
     let mut options = OpenOptions::new();
     let mut file = options.read(true).open(path).await?;
     let file_size = file.metadata().await?.len();
@@ -437,26 +472,11 @@ async fn upload_chunk(
             BytesCodec::new(),
         )))
         .send()
-        .await
-        .map_err(|err| PyException::new_err(format!("Error sending chunk: {err}")))?
-        .error_for_status()
-        .map_err(|err| {
-            PyException::new_err(format!(
-                "Server responded with error status code while upload chunk: {err}"
-            ))
-        })?;
-
+        .await?;
+    let response = response.error_for_status()?;
     let mut headers = HashMap::new();
     for (name, value) in response.headers().into_iter() {
-        headers.insert(
-            name.to_string(),
-            value
-                .to_str()
-                .map_err(|err| {
-                    PyException::new_err(format!("Response header contains non ASCII chars: {err}"))
-                })?
-                .to_owned(),
-        );
+        headers.insert(name.to_string(), value.to_str()?.to_owned());
     }
     Ok(headers)
 }
