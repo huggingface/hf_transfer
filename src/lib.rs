@@ -161,6 +161,7 @@ async fn download_async(
     let client = reqwest::Client::builder()
         // https://github.com/hyperium/hyper/issues/2136#issuecomment-589488526
         .http2_keep_alive_timeout(Duration::from_secs(15))
+        .tcp_keepalive(Duration::from_secs(15))
         .build()
         .unwrap();
 
