@@ -77,9 +77,9 @@ fn download(
             if path.exists() {
                 match remove_file(filename) {
                     Ok(_) => err,
-                    Err(err) => {
-                        PyException::new_err(format!("Error while removing corrupted file: {err}"))
-                    }
+                    Err(rm_err) => PyException::new_err(format!(
+                        "Error while removing corrupted file: {rm_err}, original error {err}"
+                    )),
                 }
             } else {
                 err
