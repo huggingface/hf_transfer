@@ -324,7 +324,7 @@ async fn download_async(
 enum Error {
     Io(std::io::Error),
     Request(reqwest::Error),
-    ToStrError(ToStrError),
+    StrConversion(ToStrError),
 }
 
 impl From<std::io::Error> for Error {
@@ -341,7 +341,7 @@ impl From<reqwest::Error> for Error {
 
 impl From<ToStrError> for Error {
     fn from(value: ToStrError) -> Self {
-        Self::ToStrError(value)
+        Error::StrConversion(value)
     }
 }
 
@@ -350,7 +350,7 @@ impl Display for Error {
         match self {
             Self::Io(io) => write!(f, "Io: {io}"),
             Self::Request(req) => write!(f, "Request: {req}"),
-            Self::ToStrError(req) => write!(f, "Response non ascii: {req}"),
+            Self::StrConversion(req) => write!(f, "Response non ascii: {req}"),
         }
     }
 }
@@ -445,7 +445,7 @@ async fn upload_async(
                         match e {
                             Error::Io(io) => PyException::new_err(format!("Io error {io}")),
                             Error::Request(req) => PyException::new_err(format!("Error while sending chunk {req}")),
-                            Error::ToStrError(req) => PyException::new_err(format!("Response header contains non ASCII chars: {req}")),
+                            Error::StrConversion(req) => PyException::new_err(format!("Response header contains non ASCII chars: {req}")),
                         }
                     }).map(|chunk| (part_number, chunk, chunk_size))
                 }));
