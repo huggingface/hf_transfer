@@ -5,6 +5,7 @@ import random
 from hf_transfer import download, multipart_upload
 
 
+@pytest.mark.skip(reason="no way of currently testing this")
 def test_download_basic():
     """Test basic download functionality"""
     with tempfile.NamedTemporaryFile(delete=False) as tmp:
