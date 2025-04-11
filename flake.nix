@@ -125,14 +125,11 @@
                     rustToolchains."rust${rustVersion}"
                     pkgs.pkg-config
                     pkgs.openssl
-                    pkgs.rustup
                   ];
                 }
                 ''
                   export HOME=$(mktemp -d)
                   export CARGO_HOME=$HOME/.cargo
-                  export RUSTUP_HOME=$HOME/.rustup
-                  rustup default ${rustVersion}
                   cargo clippy --all-targets --all-features -- -D warnings
                   cargo fmt --all -- --check
                   python${pythonVersion} -m pytest tests/ -v
