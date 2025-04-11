@@ -56,7 +56,9 @@ jobs:
       - name: Install dependencies
         run: |
           source .venv/bin/activate
-          pip install -e '.[dev]'
+          pip install --upgrade pip
+          pip install maturin pytest
+          maturin develop
 
       - name: Run tests
         run: |
