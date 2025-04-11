@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::fs::remove_file;
 use std::io::SeekFrom;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::fs::OpenOptions;
@@ -56,6 +56,16 @@ fn download(
                 .to_string(),
         ));
     }
+    if max_files == 0 {
+        return Err(PyException::new_err(
+            "`max_files` needs to be positive".to_string(),
+        ));
+    }
+    if chunk_size == 0 {
+        return Err(PyException::new_err(
+            "`chunk_size` needs to be positive".to_string(),
+        ));
+    }
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
@@ -77,9 +87,9 @@ fn download(
             if path.exists() {
                 match remove_file(filename) {
                     Ok(_) => err,
-                    Err(err) => {
-                        PyException::new_err(format!("Error while removing corrupted file: {err}"))
-                    }
+                    Err(rm_err) => PyException::new_err(format!(
+                        "Error while removing corrupted file: {rm_err}, original error {err}"
+                    )),
                 }
             } else {
                 err
@@ -102,7 +112,7 @@ fn download(
 #[pyfunction]
 #[pyo3(signature = (file_path, parts_urls, chunk_size, max_files, parallel_failures=0, max_retries=0, callback=None))]
 fn multipart_upload(
-    file_path: String,
+    file_path: PathBuf,
     parts_urls: Vec<String>,
     chunk_size: u64,
     max_files: usize,
@@ -120,6 +130,22 @@ fn multipart_upload(
             "For retry mechanism you need to set both `parallel_failures` and `max_retries`"
                 .to_string(),
         ));
+    }
+    if max_files == 0 {
+        return Err(PyException::new_err(
+            "`max_files` needs to be positive".to_string(),
+        ));
+    }
+    if chunk_size == 0 {
+        return Err(PyException::new_err(
+            "`chunk_size` needs to be positive".to_string(),
+        ));
+    }
+    if !file_path.exists() {
+        return Err(PyException::new_err(format!(
+            "{}: No such file or directory",
+            file_path.display()
+        )));
     }
 
     tokio::runtime::Builder::new_multi_thread()
@@ -162,7 +188,7 @@ async fn download_async(
         // https://github.com/hyperium/hyper/issues/2136#issuecomment-589488526
         .http2_keep_alive_timeout(Duration::from_secs(15))
         .build()
-        .unwrap();
+        .map_err(|err| PyException::new_err(format!("Failed to create client: {err}")))?;
 
     let mut headers = HeaderMap::new();
     let mut auth_token = None;
@@ -298,7 +324,7 @@ async fn download_async(
 enum Error {
     Io(std::io::Error),
     Request(reqwest::Error),
-    ToStrError(ToStrError),
+    StrConversion(ToStrError),
 }
 
 impl From<std::io::Error> for Error {
@@ -315,7 +341,7 @@ impl From<reqwest::Error> for Error {
 
 impl From<ToStrError> for Error {
     fn from(value: ToStrError) -> Self {
-        Self::ToStrError(value)
+        Error::StrConversion(value)
     }
 }
 
@@ -324,7 +350,7 @@ impl Display for Error {
         match self {
             Self::Io(io) => write!(f, "Io: {io}"),
             Self::Request(req) => write!(f, "Request: {req}"),
-            Self::ToStrError(req) => write!(f, "Response non ascii: {req}"),
+            Self::StrConversion(req) => write!(f, "Response non ascii: {req}"),
         }
     }
 }
@@ -362,7 +388,7 @@ async fn download_chunk(
 
 #[allow(clippy::too_many_arguments)]
 async fn upload_async(
-    file_path: String,
+    file_path: PathBuf,
     parts_urls: Vec<String>,
     chunk_size: u64,
     max_files: usize,
@@ -419,7 +445,7 @@ async fn upload_async(
                         match e {
                             Error::Io(io) => PyException::new_err(format!("Io error {io}")),
                             Error::Request(req) => PyException::new_err(format!("Error while sending chunk {req}")),
-                            Error::ToStrError(req) => PyException::new_err(format!("Response header contains non ASCII chars: {req}")),
+                            Error::StrConversion(req) => PyException::new_err(format!("Response header contains non ASCII chars: {req}")),
                         }
                     }).map(|chunk| (part_number, chunk, chunk_size))
                 }));
@@ -452,7 +478,7 @@ async fn upload_async(
 async fn upload_chunk(
     client: &reqwest::Client,
     url: &str,
-    path: &str,
+    path: &PathBuf,
     start: u64,
     chunk_size: u64,
 ) -> Result<HashMap<String, String>, Error> {
