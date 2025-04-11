@@ -36,45 +36,46 @@
           # "nightly"
         ];
 
-        mkPythonPackage = pythonVersion: let
-          python = pkgs."python${pythonVersion}";
-        in python.pkgs.buildPythonPackage {
-          pname = "hf_transfer";
-          version = "0.1.9-dev0";
-          format = "pyproject";
+        mkPythonPackage =
+          pythonVersion:
+          let
+            python = pkgs."python${pythonVersion}";
+          in
+          python.pkgs.buildPythonPackage {
+            pname = "hf_transfer";
+            version = "0.1.9-dev0";
+            format = "pyproject";
 
-          src = ./.;
+            src = ./.;
 
-          cargoDeps = pkgs.rustPlatform.importCargoLock {
-            lockFile = ./Cargo.lock;
+            cargoDeps = pkgs.rustPlatform.importCargoLock {
+              lockFile = ./Cargo.lock;
+            };
+
+            nativeBuildInputs = with pkgs; [
+              rustPlatform.cargoSetupHook
+              rustPlatform.maturinBuildHook
+              pkg-config
+              perl
+              maturin
+              python3Packages.setuptools
+              python3Packages.wheel
+            ];
+
+            buildInputs = with pkgs; [
+              openssl
+            ];
+
+            pythonImportsCheck = [ "hf_transfer" ];
+
+            nativeCheckInputs = [ python.pkgs.pytest ];
+
+            MATURIN_SETUP_ARGS = "--no-default-features";
           };
-
-          nativeBuildInputs = with pkgs; [
-            rustPlatform.cargoSetupHook
-            pkg-config
-            perl
-            maturin
-            python3Packages.setuptools
-            python3Packages.wheel
-          ];
-
-          buildInputs = with pkgs; [
-            openssl
-          ];
-
-          pythonImportsCheck = [ "hf_transfer" ];
-
-          nativeCheckInputs = [ python.pkgs.pytest ];
-
-          MATURIN_SETUP_ARGS = "--no-default-features";
-        };
 
         pythonEnvs =
           builtins.mapAttrs
-            (
-              name: version:
-              pkgs."python${version}".withPackages (ps: [ (mkPythonPackage version) ])
-            )
+            (name: version: pkgs."python${version}".withPackages (ps: [ (mkPythonPackage version) ]))
             (
               builtins.listToAttrs (
                 map (v: {
@@ -92,9 +93,14 @@
         );
       in
       {
-        packages = builtins.mapAttrs
-          (name: version: mkPythonPackage version)
-          (builtins.listToAttrs (map (v: { name = "python${v}"; value = v; }) pythonVersions));
+        packages = builtins.mapAttrs (name: version: mkPythonPackage version) (
+          builtins.listToAttrs (
+            map (v: {
+              name = "python${v}";
+              value = v;
+            }) pythonVersions
+          )
+        );
 
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
@@ -132,17 +138,17 @@
                   touch $out
                 '';
           in
-            builtins.foldl' (
-              acc: pythonVersion:
+          builtins.foldl' (
+            acc: pythonVersion:
+            acc
+            // builtins.foldl' (
+              acc: rustVersion:
               acc
-              // builtins.foldl' (
-                acc: rustVersion:
-                acc
-                // {
-                  "python${pythonVersion}-rust${rustVersion}" = mkCheck pythonVersion rustVersion;
-                }
-              ) { } rustVersions
-            ) { } pythonVersions;
+              // {
+                "python${pythonVersion}-rust${rustVersion}" = mkCheck pythonVersion rustVersion;
+              }
+            ) { } rustVersions
+          ) { } pythonVersions;
       }
     );
 }
