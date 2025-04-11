@@ -125,6 +125,7 @@
                     rustToolchains."rust${rustVersion}"
                     pkgs.pkg-config
                     pkgs.openssl
+                    pkgs.rustup
                   ];
                 }
                 ''
