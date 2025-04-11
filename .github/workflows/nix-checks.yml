@@ -1,0 +1,41 @@
+name: Nix Checks
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  nix-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v9
+
+      - name: Setup Cachix
+        uses: cachix/cachix-action@v14
+        with:
+          name: text-generation-inference
+          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+
+      - name: Run Nix Checks
+        run: |
+          # Run checks for all Python versions with stable Rust
+          nix flake check
+          
+          # Build the development shell to ensure it works
+          nix develop -c echo "Development shell works!"
+
+      - name: Cache Nix store
+        uses: actions/cache@v4
+        with:
+          path: |
+            /nix/store
+            /nix/var/nix/db
+            ~/.cache/nix
+          key: ${{ runner.os }}-nix-${{ hashFiles('flake.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-nix- 
