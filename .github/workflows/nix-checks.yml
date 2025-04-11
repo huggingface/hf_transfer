@@ -22,6 +22,8 @@ jobs:
         with:
           name: text-generation-inference
           authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+        env:
+          USER: github_runner
 
       - name: Run Nix Checks
         run: |
