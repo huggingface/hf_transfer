@@ -75,7 +75,14 @@
 
         pythonEnvs =
           builtins.mapAttrs
-            (name: version: pkgs."python${version}".withPackages (ps: [ (mkPythonPackage version) ]))
+            (
+              name: version:
+              pkgs."python${version}".withPackages (ps: [
+                (mkPythonPackage version)
+                ps.pytest
+                ps.exceptiongroup
+              ])
+            )
             (
               builtins.listToAttrs (
                 map (v: {
@@ -91,6 +98,10 @@
             value = pkgs.rust-bin."${v}".latest.default;
           }) rustVersions
         );
+
+        cargoLock = pkgs.rustPlatform.importCargoLock {
+          lockFile = ./Cargo.lock;
+        };
       in
       {
         packages = builtins.mapAttrs (name: version: mkPythonPackage version) (
@@ -118,23 +129,39 @@
           let
             mkCheck =
               pythonVersion: rustVersion:
-              pkgs.runCommand "check-${pythonVersion}-${rustVersion}"
-                {
-                  nativeBuildInputs = [
-                    pythonEnvs."python${pythonVersion}"
-                    rustToolchains."rust${rustVersion}"
-                    pkgs.pkg-config
-                    pkgs.openssl
-                  ];
-                }
-                ''
-                  export HOME=$(mktemp -d)
-                  export CARGO_HOME=$HOME/.cargo
+              let
+                python = pythonEnvs."python${pythonVersion}";
+              in
+              pkgs.rustPlatform.buildRustPackage {
+                pname = "hf_transfer-check";
+                version = "0.1.9-dev0";
+                src = self;
+                cargoLock = {
+                  lockFile = ./Cargo.lock;
+                };
+
+                nativeBuildInputs = [
+                  python
+                  rustToolchains."rust${rustVersion}"
+                  pkgs.pkg-config
+                  pkgs.openssl
+                  pkgs.maturin
+                  pkgs.perl
+                  pkgs.python3Packages.setuptools
+                  pkgs.python3Packages.wheel
+                ];
+
+                buildInputs = [ pkgs.openssl ];
+
+                buildPhase = ''
+                  # Run the checks
                   cargo clippy --all-targets --all-features -- -D warnings
                   cargo fmt --all -- --check
-                  python${pythonVersion} -m pytest tests/ -v
-                  touch $out
+                  ${python}/bin/python -m pytest tests/ -v
                 '';
+
+                installPhase = "touch $out";
+              };
           in
           builtins.foldl' (
             acc: pythonVersion:
