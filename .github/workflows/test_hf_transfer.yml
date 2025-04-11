@@ -1,0 +1,70 @@
+name: Test hf_transfer
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - '*'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12']
+        rust-version: ['stable', 'nightly']
+        exclude:
+          - os: macos-latest
+            rust-version: nightly
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: Set up Rust ${{ matrix.rust-version }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust-version }}
+          components: rustfmt, clippy
+
+      - name: Install system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev
+
+      - name: Install system dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install pkg-config openssl
+
+      - name: Create virtual environment
+        run: python -m venv .venv
+
+      - name: Install dependencies
+        run: |
+          source .venv/bin/activate
+          pip install -e '.[dev]'
+
+      - name: Run tests
+        run: |
+          source .venv/bin/activate
+          pytest tests/ -v
+
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Run rustfmt
+        run: cargo fmt --all -- --check 

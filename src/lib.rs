@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::fs::remove_file;
 use std::io::SeekFrom;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::fs::OpenOptions;
@@ -54,6 +54,16 @@ fn download(
         return Err(PyException::new_err(
             "For retry mechanism you need to set both `parallel_failures` and `max_retries`"
                 .to_string(),
+        ));
+    }
+    if max_files == 0 {
+        return Err(PyException::new_err(
+            "`max_files` needs to be positive".to_string(),
+        ));
+    }
+    if chunk_size == 0 {
+        return Err(PyException::new_err(
+            "`chunk_size` needs to be positive".to_string(),
         ));
     }
     tokio::runtime::Builder::new_multi_thread()
@@ -102,7 +112,7 @@ fn download(
 #[pyfunction]
 #[pyo3(signature = (file_path, parts_urls, chunk_size, max_files, parallel_failures=0, max_retries=0, callback=None))]
 fn multipart_upload(
-    file_path: String,
+    file_path: PathBuf,
     parts_urls: Vec<String>,
     chunk_size: u64,
     max_files: usize,
@@ -120,6 +130,22 @@ fn multipart_upload(
             "For retry mechanism you need to set both `parallel_failures` and `max_retries`"
                 .to_string(),
         ));
+    }
+    if max_files == 0 {
+        return Err(PyException::new_err(
+            "`max_files` needs to be positive".to_string(),
+        ));
+    }
+    if chunk_size == 0 {
+        return Err(PyException::new_err(
+            "`chunk_size` needs to be positive".to_string(),
+        ));
+    }
+    if !file_path.exists() {
+        return Err(PyException::new_err(format!(
+            "{}: No such file or directory",
+            file_path.display()
+        )));
     }
 
     tokio::runtime::Builder::new_multi_thread()
@@ -162,7 +188,7 @@ async fn download_async(
         // https://github.com/hyperium/hyper/issues/2136#issuecomment-589488526
         .http2_keep_alive_timeout(Duration::from_secs(15))
         .build()
-        .unwrap();
+        .map_err(|err| PyException::new_err(format!("Failed to create client: {err}")))?;
 
     let mut headers = HeaderMap::new();
     let mut auth_token = None;
@@ -362,7 +388,7 @@ async fn download_chunk(
 
 #[allow(clippy::too_many_arguments)]
 async fn upload_async(
-    file_path: String,
+    file_path: PathBuf,
     parts_urls: Vec<String>,
     chunk_size: u64,
     max_files: usize,
@@ -452,7 +478,7 @@ async fn upload_async(
 async fn upload_chunk(
     client: &reqwest::Client,
     url: &str,
-    path: &str,
+    path: &PathBuf,
     start: u64,
     chunk_size: u64,
 ) -> Result<HashMap<String, String>, Error> {
