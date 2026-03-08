@@ -607,6 +607,39 @@ async fn download_chunk_to_mem(
     Ok(content.to_vec())
 }
 
+/// Stream HTTP response directly into a raw pointer at the given offset.
+/// Avoids intermediate Vec allocation -- data goes straight from network to target buffer.
+///
+/// SAFETY: caller must ensure `ptr.add(offset..offset+chunk_len)` is valid and non-overlapping
+/// with any concurrent writes.
+async fn download_chunk_stream_into(
+    client: &reqwest::Client,
+    url: &str,
+    start: usize,
+    stop: usize,
+    headers: HeaderMap,
+    buf: Arc<SharedBufPtr>,
+    offset: usize,
+) -> Result<usize, Error> {
+    let range = format!("bytes={start}-{stop}");
+    let mut response = client
+        .get(url)
+        .headers(headers)
+        .header(RANGE, range)
+        .send()
+        .await?
+        .error_for_status()?;
+
+    let mut written = 0;
+    while let Some(chunk) = response.chunk().await? {
+        unsafe {
+            std::ptr::copy_nonoverlapping(chunk.as_ptr(), buf.0.add(offset + written), chunk.len());
+        }
+        written += chunk.len();
+    }
+    Ok(written)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn upload_async(
     file_path: String,
@@ -880,11 +913,12 @@ async fn download_into_buffer_async(
                 .await
                 .map_err(|err| PyException::new_err(format!("Error while downloading: {err}")))?;
 
-            let mut chunk =
-                download_chunk_to_mem(&client, &url, start, stop, headers.clone()).await;
+            // Stream directly into the target buffer (no intermediate Vec)
+            let mut result =
+                download_chunk_stream_into(&client, &url, start, stop, headers.clone(), ptr.clone(), start).await;
             let mut i = 0;
             if parallel_failures > 0 {
-                while let Err(_dlerr) = chunk {
+                while let Err(_dlerr) = result {
                     if i >= max_retries {
                         return Err(PyException::new_err(format!(
                             "Failed after too many retries ({max_retries}): {_dlerr}"
@@ -902,29 +936,17 @@ async fn download_into_buffer_async(
                     let wait_time = exponential_backoff(BASE_WAIT_TIME, i, MAX_WAIT_TIME);
                     sleep(Duration::from_millis(wait_time as u64)).await;
 
-                    chunk =
-                        download_chunk_to_mem(&client, &url, start, stop, headers.clone()).await;
+                    result =
+                        download_chunk_stream_into(&client, &url, start, stop, headers.clone(), ptr.clone(), start).await;
                     i += 1;
                     drop(parallel_failure_permit);
                 }
             }
             drop(permit);
 
-            match chunk {
-                Ok(data) => {
-                    // SAFETY: each chunk writes to a non-overlapping [start..start+len] region
-                    // and the caller guarantees the buffer is valid for the lifetime of this call
-                    unsafe {
-                        std::ptr::copy_nonoverlapping(
-                            data.as_ptr(),
-                            ptr.0.add(start),
-                            data.len(),
-                        );
-                    }
-                    Ok(stop - start)
-                }
-                Err(e) => Err(PyException::new_err(format!("Downloading error {e}"))),
-            }
+            result
+                .map(|_| stop - start)
+                .map_err(|e| PyException::new_err(format!("Downloading error {e}")))
         }));
     }
 
