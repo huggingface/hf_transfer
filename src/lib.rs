@@ -2,7 +2,7 @@ use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
-use pyo3::types::PyAny;
+use pyo3::types::{PyAny, PyBytes};
 use rand::{thread_rng, Rng};
 use reqwest::header::{
     HeaderMap, HeaderName, HeaderValue, ToStrError, AUTHORIZATION, CONTENT_LENGTH, CONTENT_RANGE,
@@ -19,7 +19,7 @@ use std::time::Duration;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
-use tokio::sync::Semaphore;
+use tokio::sync::{Mutex, Semaphore};
 use tokio::time::sleep;
 use tokio_util::codec::{BytesCodec, FramedRead};
 
@@ -85,6 +85,56 @@ fn download(
                 err
             }
         })
+}
+
+/// Download a file into memory and return it as bytes.
+///
+/// Same parallel download mechanism as `download`, but returns the file content as a Python bytes
+/// object instead of writing to disk. Useful for loading model weights directly into GPU memory
+/// without touching disk.
+///
+/// max_files: Number of parallel connections
+/// chunk_size: Size of each chunk to download in parallel
+#[allow(clippy::too_many_arguments)]
+#[pyfunction]
+#[pyo3(signature = (url, max_files, chunk_size, parallel_failures=0, max_retries=0, headers=None, callback=None))]
+fn download_to_bytes<'py>(
+    py: Python<'py>,
+    url: String,
+    max_files: usize,
+    chunk_size: usize,
+    parallel_failures: usize,
+    max_retries: usize,
+    headers: Option<HashMap<String, String>>,
+    callback: Option<Bound<'py, PyAny>>,
+) -> PyResult<Bound<'py, PyBytes>> {
+    if parallel_failures > max_files {
+        return Err(PyException::new_err(
+            "Error parallel_failures cannot be > max_files".to_string(),
+        ));
+    }
+    if (parallel_failures == 0) != (max_retries == 0) {
+        return Err(PyException::new_err(
+            "For retry mechanism you need to set both `parallel_failures` and `max_retries`"
+                .to_string(),
+        ));
+    }
+    let data = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(async {
+            download_to_bytes_async(
+                url,
+                max_files,
+                chunk_size,
+                parallel_failures,
+                max_retries,
+                headers,
+                callback,
+            )
+            .await
+        })?;
+    Ok(PyBytes::new(py, &data))
 }
 
 /// parts_urls: Dictionary consisting of part numbers as keys and the associated url as values
@@ -361,6 +411,186 @@ async fn download_chunk(
 }
 
 #[allow(clippy::too_many_arguments)]
+async fn download_to_bytes_async(
+    url: String,
+    max_files: usize,
+    chunk_size: usize,
+    parallel_failures: usize,
+    max_retries: usize,
+    input_headers: Option<HashMap<String, String>>,
+    callback: Option<Bound<'_, PyAny>>,
+) -> PyResult<Vec<u8>> {
+    let client = reqwest::Client::builder()
+        .http2_keep_alive_timeout(Duration::from_secs(15))
+        .build()
+        .unwrap();
+
+    let mut headers = HeaderMap::new();
+    let mut auth_token = None;
+    if let Some(input_headers) = input_headers {
+        headers.reserve(input_headers.len());
+        for (k, v) in input_headers {
+            let name: HeaderName = k
+                .try_into()
+                .map_err(|err| PyException::new_err(format!("Invalid header: {err}")))?;
+            let value: HeaderValue = AsRef::<str>::as_ref(&v)
+                .try_into()
+                .map_err(|err| PyException::new_err(format!("Invalid header value: {err}")))?;
+            if name == AUTHORIZATION {
+                auth_token = Some(value);
+            } else {
+                headers.insert(name, value);
+            }
+        }
+    };
+
+    let response = if let Some(token) = auth_token.as_ref() {
+        client.get(&url).header(AUTHORIZATION, token)
+    } else {
+        client.get(&url)
+    }
+    .headers(headers.clone())
+    .header(RANGE, "bytes=0-0")
+    .send()
+    .await
+    .map_err(|err| PyException::new_err(format!("Error while downloading: {err}")))?
+    .error_for_status()
+    .map_err(|err| PyException::new_err(err.to_string()))?;
+
+    let redirected_url = response.url();
+    if Url::parse(&url)
+        .map_err(|err| PyException::new_err(format!("failed to parse url: {err}")))?
+        .host()
+        == redirected_url.host()
+    {
+        if let Some(token) = auth_token {
+            headers.insert(AUTHORIZATION, token);
+        }
+    }
+
+    let content_range = response
+        .headers()
+        .get(CONTENT_RANGE)
+        .ok_or(PyException::new_err("No content length"))?
+        .to_str()
+        .map_err(|err| PyException::new_err(format!("Error while downloading: {err}")))?;
+
+    let size: Vec<&str> = content_range.split('/').collect();
+    let length: usize = size
+        .last()
+        .ok_or(PyException::new_err(
+            "Error while downloading: No size was detected",
+        ))?
+        .parse()
+        .map_err(|err| PyException::new_err(format!("Error while downloading: {err}")))?;
+
+    // Pre-allocate the output buffer
+    let buffer = Arc::new(Mutex::new(vec![0u8; length]));
+
+    let mut handles = FuturesUnordered::new();
+    let semaphore = Arc::new(Semaphore::new(max_files));
+    let parallel_failures_semaphore = Arc::new(Semaphore::new(parallel_failures));
+
+    for start in (0..length).step_by(chunk_size) {
+        let url = redirected_url.to_string();
+        let client = client.clone();
+        let headers = headers.clone();
+        let buffer = buffer.clone();
+
+        let stop = std::cmp::min(start + chunk_size - 1, length);
+        let semaphore = semaphore.clone();
+        let parallel_failures_semaphore = parallel_failures_semaphore.clone();
+        handles.push(tokio::spawn(async move {
+            let permit = semaphore
+                .acquire_owned()
+                .await
+                .map_err(|err| PyException::new_err(format!("Error while downloading: {err}")))?;
+
+            let mut chunk =
+                download_chunk_to_mem(&client, &url, start, stop, headers.clone()).await;
+            let mut i = 0;
+            if parallel_failures > 0 {
+                while let Err(_dlerr) = chunk {
+                    if i >= max_retries {
+                        return Err(PyException::new_err(format!(
+                            "Failed after too many retries ({max_retries}): {_dlerr}"
+                        )));
+                    }
+                    let parallel_failure_permit = parallel_failures_semaphore
+                        .clone()
+                        .try_acquire_owned()
+                        .map_err(|err| {
+                            PyException::new_err(format!(
+                                "Failed too many failures in parallel ({parallel_failures}): {_dlerr} ({err})"
+                            ))
+                        })?;
+
+                    let wait_time = exponential_backoff(BASE_WAIT_TIME, i, MAX_WAIT_TIME);
+                    sleep(Duration::from_millis(wait_time as u64)).await;
+
+                    chunk =
+                        download_chunk_to_mem(&client, &url, start, stop, headers.clone()).await;
+                    i += 1;
+                    drop(parallel_failure_permit);
+                }
+            }
+            drop(permit);
+
+            match chunk {
+                Ok(data) => {
+                    let mut buf = buffer.lock().await;
+                    buf[start..start + data.len()].copy_from_slice(&data);
+                    Ok(stop - start)
+                }
+                Err(e) => Err(PyException::new_err(format!("Downloading error {e}"))),
+            }
+        }));
+    }
+
+    while let Some(result) = handles.next().await {
+        match result {
+            Ok(Ok(size)) => {
+                if let Some(ref callback) = callback {
+                    callback.call((size,), None)?;
+                }
+            }
+            Ok(Err(py_err)) => {
+                return Err(py_err);
+            }
+            Err(err) => {
+                return Err(PyException::new_err(format!(
+                    "Error while downloading: {err}"
+                )));
+            }
+        }
+    }
+
+    let data = Arc::try_unwrap(buffer)
+        .map_err(|_| PyException::new_err("Failed to unwrap buffer"))?
+        .into_inner();
+    Ok(data)
+}
+
+async fn download_chunk_to_mem(
+    client: &reqwest::Client,
+    url: &str,
+    start: usize,
+    stop: usize,
+    headers: HeaderMap,
+) -> Result<Vec<u8>, Error> {
+    let range = format!("bytes={start}-{stop}");
+    let response = client
+        .get(url)
+        .headers(headers)
+        .header(RANGE, range)
+        .send()
+        .await?
+        .error_for_status()?;
+    let content = response.bytes().await?;
+    Ok(content.to_vec())
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn upload_async(
     file_path: String,
     parts_urls: Vec<String>,
@@ -485,6 +715,7 @@ async fn upload_chunk(
 #[pymodule]
 fn hf_transfer(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(download, module)?)?;
+    module.add_function(wrap_pyfunction!(download_to_bytes, module)?)?;
     module.add_function(wrap_pyfunction!(multipart_upload, module)?)?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
