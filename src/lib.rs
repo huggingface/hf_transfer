@@ -19,12 +19,18 @@ use std::time::Duration;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::Semaphore;
 use tokio::time::sleep;
 use tokio_util::codec::{BytesCodec, FramedRead};
 
 const BASE_WAIT_TIME: usize = 300;
 const MAX_WAIT_TIME: usize = 10_000;
+
+/// Wrapper around a raw pointer to share a pre-allocated buffer across tasks.
+/// SAFETY: Only used when each task writes to a non-overlapping region of the buffer.
+struct SharedBufPtr(*mut u8);
+unsafe impl Send for SharedBufPtr {}
+unsafe impl Sync for SharedBufPtr {}
 
 /// max_files: Number of open file handles, which determines the maximum number of parallel downloads
 /// parallel_failures:  Number of maximum failures of different chunks in parallel (cannot exceed max_files)
@@ -134,7 +140,8 @@ fn download_to_bytes<'py>(
             )
             .await
         })?;
-    Ok(PyBytes::new(py, &data))
+    // Create PyBytes directly from the Vec without an extra copy
+    Ok(PyBytes::new(py, &data).unbind().into_bound(py))
 }
 
 /// parts_urls: Dictionary consisting of part numbers as keys and the associated url as values
@@ -484,8 +491,11 @@ async fn download_to_bytes_async(
         .parse()
         .map_err(|err| PyException::new_err(format!("Error while downloading: {err}")))?;
 
-    // Pre-allocate the output buffer
-    let buffer = Arc::new(Mutex::new(vec![0u8; length]));
+    // Pre-allocate the output buffer. Each chunk writes to a non-overlapping region,
+    // so we use a raw pointer to avoid mutex contention.
+    let mut buffer = vec![0u8; length];
+    let buf_ptr = buffer.as_mut_ptr();
+    let shared_ptr = Arc::new(SharedBufPtr(buf_ptr));
 
     let mut handles = FuturesUnordered::new();
     let semaphore = Arc::new(Semaphore::new(max_files));
@@ -495,7 +505,7 @@ async fn download_to_bytes_async(
         let url = redirected_url.to_string();
         let client = client.clone();
         let headers = headers.clone();
-        let buffer = buffer.clone();
+        let ptr = shared_ptr.clone();
 
         let stop = std::cmp::min(start + chunk_size - 1, length);
         let semaphore = semaphore.clone();
@@ -538,8 +548,14 @@ async fn download_to_bytes_async(
 
             match chunk {
                 Ok(data) => {
-                    let mut buf = buffer.lock().await;
-                    buf[start..start + data.len()].copy_from_slice(&data);
+                    // SAFETY: each chunk writes to a non-overlapping [start..start+len] region
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            data.as_ptr(),
+                            ptr.0.add(start),
+                            data.len(),
+                        );
+                    }
                     Ok(stop - start)
                 }
                 Err(e) => Err(PyException::new_err(format!("Downloading error {e}"))),
@@ -565,10 +581,9 @@ async fn download_to_bytes_async(
         }
     }
 
-    let data = Arc::try_unwrap(buffer)
-        .map_err(|_| PyException::new_err("Failed to unwrap buffer"))?
-        .into_inner();
-    Ok(data)
+    // All tasks are done, we have exclusive access to the buffer again
+    drop(shared_ptr);
+    Ok(buffer)
 }
 
 async fn download_chunk_to_mem(
