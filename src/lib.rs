@@ -159,6 +159,8 @@ async fn download_async(
     callback: Option<Bound<'_, PyAny>>,
 ) -> PyResult<()> {
     let client = reqwest::Client::builder()
+        // https://github.com/seanmonstar/reqwest/discussions/2350#discussioncomment-10020959
+        .use_rustls_tls()
         // https://github.com/hyperium/hyper/issues/2136#issuecomment-589488526
         .http2_keep_alive_timeout(Duration::from_secs(15))
         .build()
