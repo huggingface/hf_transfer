@@ -16,6 +16,13 @@ permissions:
 jobs:
   tests:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        toolchain:
+          # see rust-version in Cargo.toml
+          - '1.71.1'
+          # latest
+          - 'stable'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -32,6 +39,7 @@ jobs:
         with:
           command: develop
           sccache: 'true'
+          rust-toolchain: ${{ matrix.toolchain }}
       - name: Install huggingface_hub dependencies
         run: |
           source .venv/bin/activate
